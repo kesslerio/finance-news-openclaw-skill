@@ -87,3 +87,10 @@ Briefings are sent to your configured WhatsApp group in German.
 ## License
 
 Apache 2.0 - See [LICENSE](LICENSE) file for details.
+
+
+## Related Skills
+
+- **[task-tracker](https://github.com/kesslerio/task-tracker-clawdbot-skill):** Personal task management with daily standups, weekly reviews, and Telegram slash commands
+- **oura-analytics:** Sleep and health tracking with automated reports
+- **openbb:** Equity data and stock analysis (used by this skill for market quotes)

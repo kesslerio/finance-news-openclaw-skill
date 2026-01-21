@@ -184,9 +184,16 @@ def setup_delivery(sources: dict):
     """Interactive delivery channel configuration."""
     print("\n📤 Delivery Channels\n")
     
+    # Ensure delivery dict exists
+    if 'delivery' not in sources:
+        sources['delivery'] = {
+            'whatsapp': {'enabled': True, 'group': 'Niemand Boerse'},
+            'telegram': {'enabled': False, 'group': ''}
+        }
+    
     # WhatsApp
     wa_enabled = prompt_bool("Enable WhatsApp delivery", 
-                              sources['delivery']['whatsapp'].get('enabled', True))
+                              sources.get('delivery', {}).get('whatsapp', {}).get('enabled', True))
     sources['delivery']['whatsapp']['enabled'] = wa_enabled
     
     if wa_enabled:
