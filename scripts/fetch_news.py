@@ -4,6 +4,7 @@ News Fetcher - Aggregate news from multiple sources.
 """
 
 import argparse
+import feedparser
 import json
 import os
 import shutil
@@ -11,7 +12,6 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-import xml.etree.ElementTree as ET
 import urllib.request
 import urllib.error
 
@@ -76,27 +76,33 @@ def load_sources():
 
 
 def fetch_rss(url: str, limit: int = 10) -> list[dict]:
-    """Fetch and parse RSS feed."""
+    """Fetch and parse RSS/Atom feed using feedparser."""
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Clawdbot/1.0'})
-        with urllib.request.urlopen(req, timeout=10) as response:
-            content = response.read()
+        # Use feedparser to handle both RSS and Atom formats
+        parsed = feedparser.parse(url, agent='Clawdbot/1.0')
         
-        root = ET.fromstring(content)
         items = []
-        
-        # Handle both RSS 2.0 and Atom formats
-        for item in root.findall('.//item')[:limit]:
-            title = item.find('title')
-            link = item.find('link')
-            pub_date = item.find('pubDate')
-            description = item.find('description')
+        for entry in parsed.entries[:limit]:
+            # Handle both RSS and Atom formats
+            title = entry.get('title', '')
+            
+            # Link handling: Atom uses 'link' dict, RSS uses string
+            if isinstance(entry.get('link'), dict):
+                link = entry.link.get('href', '')
+            else:
+                link = entry.get('link', '')
+            
+            # Date handling: different formats across feeds
+            published = entry.get('published', '') or entry.get('updated', '')
+            
+            # Description handling: summary vs description
+            description = entry.get('summary', '') or entry.get('description', '')
             
             items.append({
-                'title': title.text if title is not None else '',
-                'link': link.text if link is not None else '',
-                'date': pub_date.text if pub_date is not None else '',
-                'description': (description.text or '')[:200] if description is not None else ''
+                'title': title,
+                'link': link,
+                'date': published,
+                'description': (description or '')[:200]
             })
         
         return items

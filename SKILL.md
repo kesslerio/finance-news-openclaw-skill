@@ -233,6 +233,7 @@ skills/finance-news/
 ## Dependencies
 
 - Python 3.10+
+- `feedparser` (`pip install feedparser`)
 - Gemini CLI (`brew install gemini-cli`)
 - OpenBB (existing `openbb-quote` wrapper)
 - Clawdbot message tool (for WhatsApp delivery)
