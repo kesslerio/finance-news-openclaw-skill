@@ -67,6 +67,7 @@ def fetch_market_data(symbols: list[str]) -> dict:
                 ['/home/art/.local/bin/openbb-quote', symbol],
                 capture_output=True,
                 text=True,
+                stdin=subprocess.DEVNULL,
                 timeout=30
             )
             if result.returncode == 0:
@@ -155,8 +156,12 @@ def fetch_all_news(args):
                     print(f"  {article['description'][:100]}...")
 
 
-def fetch_market_news(args):
-    """Fetch market overview (indices + top headlines)."""
+def get_market_news(
+    limit: int = 5,
+    regions: list[str] | None = None,
+    max_indices_per_region: int | None = None,
+) -> dict:
+    """Get market overview (indices + top headlines) as data."""
     sources = load_sources()
     
     result = {
@@ -167,12 +172,19 @@ def fetch_market_news(args):
     
     # Fetch market indices
     for region, config in sources['markets'].items():
+        if regions is not None and region not in regions:
+            continue
+
         result['markets'][region] = {
             'name': config['name'],
             'indices': {}
         }
         
-        for symbol in config['indices']:
+        symbols = config['indices']
+        if max_indices_per_region is not None:
+            symbols = symbols[:max_indices_per_region]
+
+        for symbol in symbols:
             data = fetch_market_data([symbol])
             if symbol in data:
                 result['markets'][region]['indices'][symbol] = {
@@ -185,10 +197,17 @@ def fetch_market_news(args):
         if source in sources['rss_feeds']:
             feeds = sources['rss_feeds'][source]
             feed_url = feeds.get('top') or feeds.get('markets') or list(feeds.values())[1]
-            articles = fetch_rss(feed_url, 5)
+            articles = fetch_rss(feed_url, limit)
             for article in articles:
                 article['source'] = feeds.get('name', source)
             result['headlines'].extend(articles)
+    
+    return result
+
+
+def fetch_market_news(args):
+    """Fetch market overview (indices + top headlines)."""
+    result = get_market_news(args.limit)
     
     if args.json:
         print(json.dumps(result, indent=2))
@@ -209,13 +228,15 @@ def fetch_market_news(args):
             print(f"• [{article['source']}] {article['title']}")
 
 
-def fetch_portfolio_news(args):
-    """Fetch news for portfolio stocks."""
+def get_portfolio_news(limit: int = 5, max_stocks: int = 5) -> dict:
+    """Get news for portfolio stocks as data."""
     # Get symbols from portfolio
     result = subprocess.run(
         ['python3', SCRIPT_DIR / 'portfolio.py', 'symbols'],
         capture_output=True,
-        text=True
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=10
     )
     
     if result.returncode != 0:
@@ -225,7 +246,6 @@ def fetch_portfolio_news(args):
     symbols = result.stdout.strip().split(',')
     
     # Limit to max 5 stocks for briefings (performance)
-    max_stocks = getattr(args, 'max_stocks', 5)
     if max_stocks and len(symbols) > max_stocks:
         symbols = symbols[:max_stocks]
     
@@ -238,18 +258,25 @@ def fetch_portfolio_news(args):
         if not symbol:
             continue
         
-        articles = fetch_ticker_news(symbol, args.limit)
+        articles = fetch_ticker_news(symbol, limit)
         quotes = fetch_market_data([symbol])
         
         news['stocks'][symbol] = {
             'quote': quotes.get(symbol, {}),
             'articles': articles
         }
+
+    return news
+
+
+def fetch_portfolio_news(args):
+    """Fetch news for portfolio stocks."""
+    news = get_portfolio_news(args.limit, args.max_stocks)
     
     if args.json:
         print(json.dumps(news, indent=2))
     else:
-        print(f"\n📊 Portfolio News ({len(symbols)} stocks)\n")
+        print(f"\n📊 Portfolio News ({len(news['stocks'])} stocks)\n")
         for symbol, data in news['stocks'].items():
             quote = data.get('quote', {})
             price = quote.get('price')

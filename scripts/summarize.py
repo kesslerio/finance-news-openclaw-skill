@@ -11,6 +11,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from fetch_news import get_market_news, get_portfolio_news
+
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_DIR = SCRIPT_DIR.parent / "config"
 
@@ -135,34 +137,14 @@ def generate_briefing(args):
     print("📡 Fetching market data...", file=sys.stderr)
     
     # Get market overview
-    market_result = subprocess.run(
-        ['python3', str(SCRIPT_DIR / 'fetch_news.py'), 'market', '--json', '--limit', '3'],
-        capture_output=True,
-        text=True,
-        timeout=120
+    market_data = get_market_news(
+        3,
+        regions=["us", "europe"],
+        max_indices_per_region=1
     )
-    
-    market_data = {}
-    if market_result.returncode == 0:
-        try:
-            market_data = json.loads(market_result.stdout)
-        except json.JSONDecodeError:
-            pass
     
     # Get portfolio news (limit to 5 stocks max for performance)
-    portfolio_result = subprocess.run(
-        ['python3', str(SCRIPT_DIR / 'fetch_news.py'), 'portfolio', '--json', '--limit', '2', '--max-stocks', '5'],
-        capture_output=True,
-        text=True,
-        timeout=90
-    )
-    
-    portfolio_data = {}
-    if portfolio_result.returncode == 0:
-        try:
-            portfolio_data = json.loads(portfolio_result.stdout)
-        except json.JSONDecodeError:
-            pass
+    portfolio_data = get_portfolio_news(2, 5)
     
     # Build content for summarization
     content_parts = []
