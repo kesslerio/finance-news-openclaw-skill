@@ -66,6 +66,7 @@ def generate_and_send(args):
         cmd,
         capture_output=True,
         text=True,
+        stdin=subprocess.DEVNULL,
         timeout=300
     )
     
