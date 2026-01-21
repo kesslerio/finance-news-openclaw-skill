@@ -78,8 +78,13 @@ def load_sources():
 def fetch_rss(url: str, limit: int = 10) -> list[dict]:
     """Fetch and parse RSS/Atom feed using feedparser."""
     try:
-        # Use feedparser to handle both RSS and Atom formats
-        parsed = feedparser.parse(url)
+        # Fetch feed content first (handles SSL/certs properly)
+        req = urllib.request.Request(url, headers={'User-Agent': 'Clawdbot/1.0'})
+        with urllib.request.urlopen(req, timeout=15) as response:
+            content = response.read()
+        
+        # Parse with feedparser (handles RSS and Atom formats)
+        parsed = feedparser.parse(content)
         
         items = []
         for entry in parsed.entries[:limit]:
