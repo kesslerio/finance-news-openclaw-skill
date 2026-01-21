@@ -177,7 +177,11 @@ def fetch_market_data(symbols: list[str]) -> dict:
                 if data.get('change_percent') is None and data.get('price') and data.get('prev_close'):
                     price = data['price']
                     prev_close = data['prev_close']
-                    data['change_percent'] = ((price - prev_close) / prev_close) * 100
+                    
+                    # Guard against division by zero (rare but possible for new listings or data errors)
+                    if prev_close != 0:
+                        data['change_percent'] = ((price - prev_close) / prev_close) * 100
+                    # If prev_close is 0, leave change_percent as None (no valid calculation)
                 
                 results[symbol] = data
         except subprocess.TimeoutExpired:
