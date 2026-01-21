@@ -1,6 +1,8 @@
 symbol,name,category,notes
-AAPL,Apple Inc.,Tech,Core holding
-MSFT,Microsoft Corporation,Tech,
-NVDA,NVIDIA Corporation,Tech,AI play
-GOOGL,Alphabet Inc.,Tech,
-TSLA,Tesla Inc.,Auto/Tech,Volatile
+AAPL,Apple Inc.,Tech,Magnificent 7
+MSFT,Microsoft Corporation,Tech,Magnificent 7
+GOOGL,Alphabet Inc.,Tech,Magnificent 7
+AMZN,Amazon.com Inc.,Tech,Magnificent 7
+NVDA,NVIDIA Corporation,Tech,Magnificent 7
+META,Meta Platforms Inc.,Tech,Magnificent 7
+TSLA,Tesla Inc.,Tech,Magnificent 7
