@@ -4,6 +4,7 @@ News Fetcher - Aggregate news from multiple sources.
 """
 
 import argparse
+import feedparser
 import json
 import os
 import shutil
@@ -11,7 +12,6 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-import xml.etree.ElementTree as ET
 import urllib.request
 import urllib.error
 
@@ -76,27 +76,41 @@ def load_sources():
 
 
 def fetch_rss(url: str, limit: int = 10) -> list[dict]:
-    """Fetch and parse RSS feed."""
+    """Fetch and parse RSS/Atom feed using feedparser."""
     try:
+        # Fetch feed content first (handles SSL/certs properly)
         req = urllib.request.Request(url, headers={'User-Agent': 'Clawdbot/1.0'})
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=15) as response:
             content = response.read()
         
-        root = ET.fromstring(content)
-        items = []
+        # Parse with feedparser (handles RSS and Atom formats)
+        parsed = feedparser.parse(content)
         
-        # Handle both RSS 2.0 and Atom formats
-        for item in root.findall('.//item')[:limit]:
-            title = item.find('title')
-            link = item.find('link')
-            pub_date = item.find('pubDate')
-            description = item.find('description')
+        items = []
+        for entry in parsed.entries[:limit]:
+            # Skip entries without title or link
+            title = entry.get('title', '').strip()
+            if not title:
+                continue
+            
+            # Link handling: Atom uses 'link' dict, RSS uses string
+            link = entry.get('link', '')
+            if isinstance(link, dict):
+                link = link.get('href', '').strip()
+            if not link:
+                continue
+            
+            # Date handling: different formats across feeds
+            published = entry.get('published', '') or entry.get('updated', '')
+            
+            # Description handling: summary vs description
+            description = entry.get('summary', '') or entry.get('description', '')
             
             items.append({
-                'title': title.text if title is not None else '',
-                'link': link.text if link is not None else '',
-                'date': pub_date.text if pub_date is not None else '',
-                'description': (description.text or '')[:200] if description is not None else ''
+                'title': title,
+                'link': link,
+                'date': published.strip() if published else '',
+                'description': (description or '')[:200].strip()
             })
         
         return items
