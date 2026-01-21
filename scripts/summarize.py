@@ -136,7 +136,7 @@ def generate_briefing(args):
     
     # Get market overview
     market_result = subprocess.run(
-        ['python3', SCRIPT_DIR / 'fetch_news.py', '--json', 'market'],
+        ['python3', str(SCRIPT_DIR / 'fetch_news.py'), 'market', '--json', '--limit', '3'],
         capture_output=True,
         text=True,
         timeout=120
@@ -149,12 +149,12 @@ def generate_briefing(args):
         except json.JSONDecodeError:
             pass
     
-    # Get portfolio news
+    # Get portfolio news (limit to 5 stocks max for performance)
     portfolio_result = subprocess.run(
-        ['python3', SCRIPT_DIR / 'fetch_news.py', '--json', 'portfolio'],
+        ['python3', str(SCRIPT_DIR / 'fetch_news.py'), 'portfolio', '--json', '--limit', '2', '--max-stocks', '5'],
         capture_output=True,
         text=True,
-        timeout=120
+        timeout=90
     )
     
     portfolio_data = {}

@@ -224,6 +224,11 @@ def fetch_portfolio_news(args):
     
     symbols = result.stdout.strip().split(',')
     
+    # Limit to max 5 stocks for briefings (performance)
+    max_stocks = getattr(args, 'max_stocks', 5)
+    if max_stocks and len(symbols) > max_stocks:
+        symbols = symbols[:max_stocks]
+    
     news = {
         'fetched_at': datetime.now().isoformat(),
         'stocks': {}
@@ -294,6 +299,7 @@ def main():
     portfolio_parser = subparsers.add_parser('portfolio', help='News for portfolio stocks')
     portfolio_parser.add_argument('--json', action='store_true', help='Output as JSON')
     portfolio_parser.add_argument('--limit', type=int, default=5, help='Max articles per source')
+    portfolio_parser.add_argument('--max-stocks', type=int, default=5, help='Max stocks to fetch (default: 5)')
     portfolio_parser.set_defaults(func=fetch_portfolio_news)
     
     args = parser.parse_args()
