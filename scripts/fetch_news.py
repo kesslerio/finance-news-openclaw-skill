@@ -75,6 +75,38 @@ def load_sources():
         return json.load(f)
 
 
+def _get_best_feed_url(feeds: dict) -> str | None:
+    """Get the best feed URL from a feeds configuration dict.
+    
+    Uses explicit priority list and validates URLs to avoid selecting
+    non-URL values like 'name' or other config keys.
+    
+    Args:
+        feeds: Dict with feed keys like 'top', 'markets', 'tech'
+        
+    Returns:
+        Best URL string or None if no valid URL found
+    """
+    # Priority order for feed types (most relevant first)
+    PRIORITY_KEYS = ['top', 'markets', 'headlines', 'breaking']
+    
+    for key in PRIORITY_KEYS:
+        if key in feeds:
+            value = feeds[key]
+            # Validate it's a string and starts with http
+            if isinstance(value, str) and value.startswith('http'):
+                return value
+    
+    # Fallback: search all values for valid URLs (skip non-string/non-URL)
+    for key, value in feeds.items():
+        if key == 'name':
+            continue  # Skip 'name' field
+        if isinstance(value, str) and value.startswith('http'):
+            return value
+    
+    return None
+
+
 def fetch_rss(url: str, limit: int = 10) -> list[dict]:
     """Fetch and parse RSS/Atom feed using feedparser."""
     try:
@@ -268,11 +300,12 @@ def get_market_news(
     for source in ['cnbc', 'yahoo']:
         if source in sources['rss_feeds']:
             feeds = sources['rss_feeds'][source]
-            feed_url = feeds.get('top') or feeds.get('markets') or list(feeds.values())[1]
-            articles = fetch_rss(feed_url, limit)
-            for article in articles:
-                article['source'] = feeds.get('name', source)
-            result['headlines'].extend(articles)
+            feed_url = _get_best_feed_url(feeds)
+            if feed_url:
+                articles = fetch_rss(feed_url, limit)
+                for article in articles:
+                    article['source'] = feeds.get('name', source)
+                result['headlines'].extend(articles)
     
     return result
 
