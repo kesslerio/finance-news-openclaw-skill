@@ -1,6 +1,6 @@
 ---
 name: finance-news
-description: "Market news briefings with AI summaries in German. Features: Portfolio tracking, multi-market coverage (US/Europe/Japan), cron-scheduled WhatsApp briefings, WSJ/Barron's/CNBC/Yahoo aggregation."
+description: "Market news briefings with AI summaries. Features: Portfolio tracking, multi-market coverage (US/Europe/Japan), cron-scheduled WhatsApp briefings, WSJ/Barron's/CNBC/Yahoo aggregation, English/German language support."
 ---
 
 # Finance News Skill
@@ -19,7 +19,7 @@ The wizard will guide you through:
 - 📰 **RSS Feeds:** Enable/disable WSJ, Barron's, CNBC, Yahoo, etc.
 - 📊 **Markets:** Choose regions (US, Europe, Japan, Asia)
 - 📤 **Delivery:** Configure WhatsApp/Telegram group
-- 🌐 **Language:** Set default language (German/English)
+- 🌐 **Language:** Set default language (English/German)
 - ⏰ **Schedule:** Configure morning/evening cron times
 
 You can also configure specific sections:
@@ -61,24 +61,27 @@ finance-news news AAPL
 
 ### 🤖 AI Summaries
 - Gemini-powered analysis
-- Configurable language (German/English)
+- Configurable language (English/German)
 - Briefing styles: summary, analysis, headlines
 
 ### 📅 Automated Briefings
 - **Morning:** 6:30 AM PT (US market open)
 - **Evening:** 1:00 PM PT (US market close)
-- **Delivery:** WhatsApp group "Niemand Boerse"
+- **Delivery:** WhatsApp (configure group in cron scripts)
 
 ## Commands
 
 ### Briefing Generation
 
 ```bash
-# Morning briefing in German
-finance-news briefing --morning --lang de
+# Morning briefing (English is default)
+finance-news briefing --morning
 
 # Evening briefing with WhatsApp delivery
-finance-news briefing --evening --send --group "Niemand Boerse"
+finance-news briefing --evening --send --group "Market Briefing"
+
+# German language option
+finance-news briefing --morning --lang de
 
 # Analysis style (more detailed)
 finance-news briefing --style analysis

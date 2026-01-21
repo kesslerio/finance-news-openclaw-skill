@@ -41,7 +41,7 @@
     }
   },
   "language": {
-    "default": "de",
-    "supported": ["de", "en"]
+    "default": "en",
+    "supported": ["en", "de"]
   }
 }

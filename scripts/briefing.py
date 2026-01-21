@@ -92,7 +92,7 @@ def main():
                         help='Briefing type (auto-detected if not specified)')
     parser.add_argument('--style', choices=['briefing', 'analysis', 'headlines'],
                         default='briefing', help='Summary style')
-    parser.add_argument('--lang', choices=['de', 'en'], default='de',
+    parser.add_argument('--lang', choices=['en', 'de'], default='en',
                         help='Output language')
     parser.add_argument('--send', action='store_true',
                         help='Send to WhatsApp group')
