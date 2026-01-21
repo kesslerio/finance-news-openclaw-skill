@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fetch_news import get_market_news, get_portfolio_news
+from research import generate_research_content
 
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_DIR = SCRIPT_DIR.parent / "config"
@@ -21,6 +22,85 @@ def load_config():
     """Load source configuration."""
     with open(CONFIG_DIR / "sources.json", 'r') as f:
         return json.load(f)
+
+
+def extract_agent_reply(raw: str) -> str:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw.strip()
+
+    for key in ("reply", "message", "text", "output", "result"):
+        if isinstance(data, dict) and key in data and isinstance(data[key], str):
+            return data[key].strip()
+    if isinstance(data, dict) and "messages" in data:
+        messages = data.get("messages", [])
+        if messages:
+            last = messages[-1]
+            if isinstance(last, dict):
+                text = last.get("text") or last.get("message")
+                if isinstance(text, str):
+                    return text.strip()
+    return raw.strip()
+
+
+def summarize_with_claude(content: str, language: str = "de", style: str = "briefing") -> str:
+    """Generate AI summary using Claude via Clawdbot agent."""
+    lang_prompts = {
+        "de": "Antworte auf Deutsch.",
+        "en": "Respond in English."
+    }
+
+    style_prompts = {
+        "briefing": """Du bist ein Finanzanalyst, der einen prägnanten Markt-Briefing erstellt.
+Fasse die wichtigsten Punkte zusammen:
+- Marktstimmung (bullisch/bärisch/neutral)
+- Top 3 wichtigste Nachrichten
+- Auswirkungen auf das Portfolio
+- Kurze Handlungsempfehlung
+
+Halte es unter 200 Wörtern. Verwende Emojis sparsam für Lesbarkeit.""",
+
+        "analysis": """Du bist ein erfahrener Finanzanalyst.
+Analysiere die Nachrichten und gib:
+- Detaillierte Marktanalyse
+- Sektortrends
+- Risiken und Chancen
+- Konkrete Empfehlungen
+
+Sei professionell aber verständlich.""",
+
+        "headlines": """Fasse die wichtigsten Schlagzeilen in 5 Bulletpoints zusammen.
+Jeder Punkt sollte maximal 15 Wörter haben."""
+    }
+
+    prompt = f"""{style_prompts.get(style, style_prompts['briefing'])}
+
+{lang_prompts.get(language, lang_prompts['de'])}
+
+Nutze die folgenden Informationen für das Briefing:
+
+{content}
+"""
+
+    result = subprocess.run(
+        [
+            'clawdbot', 'agent',
+            '--session-id', 'finance-news-briefing',
+            '--message', prompt,
+            '--json',
+            '--timeout', '120'
+        ],
+        capture_output=True,
+        text=True,
+        timeout=150
+    )
+
+    if result.returncode == 0:
+        return extract_agent_reply(result.stdout)
+
+    stderr = result.stderr.strip() or "unknown error"
+    return f"⚠️ Claude briefing error: {stderr}"
 
 
 def summarize_with_gemini(content: str, language: str = "de", style: str = "briefing") -> str:
@@ -146,30 +226,49 @@ def generate_briefing(args):
     # Get portfolio news (limit to 5 stocks max for performance)
     portfolio_data = get_portfolio_news(2, 5)
     
-    # Build content for summarization
+    # Build raw content for summarization
     content_parts = []
-    
+
     if market_data:
         content_parts.append(format_market_data(market_data))
         if market_data.get('headlines'):
             content_parts.append(format_headlines(market_data['headlines']))
-    
+
     # Only include portfolio if fetch succeeded (no error key)
     if portfolio_data and 'error' not in portfolio_data:
         content_parts.append(format_portfolio_news(portfolio_data))
     elif portfolio_data and 'error' in portfolio_data:
         print(f"⚠️ Skipping portfolio: {portfolio_data['error']}", file=sys.stderr)
-    
-    content = '\n\n'.join(content_parts)
-    
-    if not content.strip():
+
+    raw_content = '\n\n'.join(content_parts)
+
+    if not raw_content.strip():
         print("⚠️ No data available for briefing", file=sys.stderr)
         return
-    
-    print("🤖 Generating AI summary...", file=sys.stderr)
-    
+
+    research_result = generate_research_content(market_data, portfolio_data)
+    research_report = research_result['report']
+    source = research_result['source']
+
+    if research_report.strip():
+        content = f"""# Research Report ({source})
+
+{research_report}
+
+# Raw Market Data
+
+{raw_content}
+"""
+    else:
+        content = raw_content
+
+    print("🤖 Generating AI summary with Claude...", file=sys.stderr)
+
     # Generate summary
-    summary = summarize_with_gemini(content, language, args.style)
+    summary = summarize_with_claude(content, language, args.style)
+    if summary.startswith("⚠️ Claude briefing error"):
+        print("⚠️ Claude failed; falling back to Gemini summarizer", file=sys.stderr)
+        summary = summarize_with_gemini(raw_content, language, args.style)
     
     # Format output
     time_str = datetime.now().strftime("%H:%M")

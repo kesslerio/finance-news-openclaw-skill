@@ -7,6 +7,7 @@ Outputs research_report.md for later analysis.
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -71,6 +72,10 @@ def format_portfolio_news(portfolio_data: dict) -> str:
         lines.append("")
     
     return '\n'.join(lines)
+
+
+def gemini_available() -> bool:
+    return shutil.which('gemini') is not None
 
 
 def research_with_gemini(content: str, focus_areas: list = None) -> str:
@@ -142,6 +147,35 @@ Liefere einen substanziellen Bericht (500-800 Wörter).
         return "⚠️ Gemini CLI not found. Install: brew install gemini-cli"
 
 
+def format_raw_data_report(market_data: dict, portfolio_data: dict) -> str:
+    parts = []
+    if market_data:
+        parts.append(format_market_data(market_data))
+        if market_data.get('headlines'):
+            parts.append(format_headlines(market_data['headlines']))
+    if portfolio_data and 'error' not in portfolio_data:
+        parts.append(format_portfolio_news(portfolio_data))
+    return '\n\n'.join(parts)
+
+
+def generate_research_content(market_data: dict, portfolio_data: dict, focus_areas: list = None) -> dict:
+    raw_report = format_raw_data_report(market_data, portfolio_data)
+    if not raw_report.strip():
+        return {
+            'report': '',
+            'source': 'none'
+        }
+    if gemini_available():
+        return {
+            'report': research_with_gemini(raw_report, focus_areas),
+            'source': 'gemini'
+        }
+    return {
+        'report': raw_report,
+        'source': 'raw'
+    }
+
+
 def generate_research_report(args):
     """Generate full research report."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -167,31 +201,23 @@ def generate_research_report(args):
         args.max_stocks if hasattr(args, 'max_stocks') else 10
     )
     
-    # Build content
-    content_parts = []
-    
-    if market_data:
-        content_parts.append(format_market_data(market_data))
-        if market_data.get('headlines'):
-            content_parts.append(format_headlines(market_data['headlines']))
-    
-    if portfolio_data and 'error' not in portfolio_data:
-        content_parts.append(format_portfolio_news(portfolio_data))
-    
-    content = '\n\n'.join(content_parts)
-    
-    if not content.strip():
-        print("⚠️ No data available for research", file=sys.stderr)
-        return
-    
-    # Run Gemini research
-    print("🔬 Running deep research with Gemini...", file=sys.stderr)
-    
+    # Build report
     focus_areas = None
     if hasattr(args, 'focus') and args.focus:
         focus_areas = args.focus.split(',')
-    
-    research_report = research_with_gemini(content, focus_areas)
+
+    research_result = generate_research_content(market_data, portfolio_data, focus_areas)
+    research_report = research_result['report']
+    source = research_result['source']
+
+    if not research_report.strip():
+        print("⚠️ No data available for research", file=sys.stderr)
+        return
+
+    if source == 'gemini':
+        print("🔬 Running deep research with Gemini...", file=sys.stderr)
+    else:
+        print("🧾 Gemini not available; using raw data report", file=sys.stderr)
     
     # Add metadata header
     timestamp = datetime.now().isoformat()
