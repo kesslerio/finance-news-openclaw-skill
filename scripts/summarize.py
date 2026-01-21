@@ -274,6 +274,7 @@ def generate_briefing(args):
     # Generate summary
     summary = summarize_with_claude(content, language, args.style)
     if summary.startswith("⚠️ Claude briefing error"):
+        print(summary, file=sys.stderr)
         print("⚠️ Claude failed; falling back to Gemini summarizer", file=sys.stderr)
         summary = summarize_with_gemini(content, language, args.style)
     
