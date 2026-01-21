@@ -83,18 +83,25 @@ Nutze die folgenden Informationen für das Briefing:
 {content}
 """
 
-    result = subprocess.run(
-        [
-            'clawdbot', 'agent',
-            '--session-id', 'finance-news-briefing',
-            '--message', prompt,
-            '--json',
-            '--timeout', '120'
-        ],
-        capture_output=True,
-        text=True,
-        timeout=150
-    )
+    try:
+        result = subprocess.run(
+            [
+                'clawdbot', 'agent',
+                '--session-id', 'finance-news-briefing',
+                '--message', prompt,
+                '--json',
+                '--timeout', '120'
+            ],
+            capture_output=True,
+            text=True,
+            timeout=150
+        )
+    except subprocess.TimeoutExpired:
+        return "⚠️ Claude briefing error: timeout"
+    except FileNotFoundError:
+        return "⚠️ Claude briefing error: clawdbot CLI not found"
+    except OSError as exc:
+        return f"⚠️ Claude briefing error: {exc}"
 
     if result.returncode == 0:
         return extract_agent_reply(result.stdout)
@@ -268,7 +275,7 @@ def generate_briefing(args):
     summary = summarize_with_claude(content, language, args.style)
     if summary.startswith("⚠️ Claude briefing error"):
         print("⚠️ Claude failed; falling back to Gemini summarizer", file=sys.stderr)
-        summary = summarize_with_gemini(raw_content, language, args.style)
+        summary = summarize_with_gemini(content, language, args.style)
     
     # Format output
     time_str = datetime.now().strftime("%H:%M")
