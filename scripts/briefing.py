@@ -60,6 +60,10 @@ def generate_and_send(args):
         '--lang', args.lang
     ]
     
+    # Pass --json flag if requested
+    if args.json:
+        cmd.append('--json')
+    
     print(f"📊 Generating {briefing_time} briefing...", file=sys.stderr)
     
     result = subprocess.run(
@@ -81,7 +85,19 @@ def generate_and_send(args):
     
     # Send to WhatsApp if requested
     if args.send and args.group:
-        send_to_whatsapp(briefing, args.group)
+        if args.json:
+            # Parse JSON and send summary only
+            try:
+                data = json.loads(briefing)
+                message = data.get('summary', '')
+                if message:
+                    send_to_whatsapp(message, args.group)
+                else:
+                    print(f"⚠️ No summary field in JSON output", file=sys.stderr)
+            except json.JSONDecodeError:
+                print(f"⚠️ Cannot parse JSON for WhatsApp send", file=sys.stderr)
+        else:
+            send_to_whatsapp(briefing, args.group)
     
     return briefing
 
