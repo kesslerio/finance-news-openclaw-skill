@@ -247,11 +247,27 @@ def fetch_portfolio_news(args):
         print(f"\n📊 Portfolio News ({len(symbols)} stocks)\n")
         for symbol, data in news['stocks'].items():
             quote = data.get('quote', {})
-            price = quote.get('price', 'N/A')
-            change_pct = quote.get('change_percent', 0)
-            emoji = '📈' if change_pct >= 0 else '📉'
+            price = quote.get('price')
+            prev_close = quote.get('prev_close', 0)
+            open_price = quote.get('open', 0)
             
-            print(f"\n**{symbol}** {emoji} ${price} ({change_pct:+.2f}%)")
+            # Calculate daily change
+            # If markets are closed (price is null), calculate from last session (prev_close vs day-before close)
+            # Since we don't have day-before close, use open -> prev_close as proxy for last session move
+            change_pct = 0
+            display_price = price or prev_close
+            
+            if price and prev_close and prev_close != 0:
+                # Markets open: current price vs prev close
+                change_pct = ((price - prev_close) / prev_close) * 100
+            elif not price and open_price and prev_close and prev_close != 0:
+                # Markets closed: last session change (prev_close vs open)
+                change_pct = ((prev_close - open_price) / open_price) * 100
+            
+            emoji = '📈' if change_pct >= 0 else '📉'
+            price_str = f"${display_price:.2f}" if isinstance(display_price, (int, float)) else str(display_price)
+            
+            print(f"\n**{symbol}** {emoji} {price_str} ({change_pct:+.2f}%)")
             for article in data['articles'][:3]:
                 print(f"  • {article['title'][:80]}...")
 
