@@ -2,6 +2,7 @@
   "rss_feeds": {
     "wsj": {
       "name": "Wall Street Journal",
+      "enabled": true,
       "markets": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
       "business": "https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml",
       "world": "https://feeds.a.dj.com/rss/RSSWorldNews.xml"
@@ -14,28 +15,33 @@
     },
     "cnbc": {
       "name": "CNBC",
+      "enabled": true,
       "top": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
       "markets": "https://www.cnbc.com/id/20910258/device/rss/rss.html",
       "tech": "https://www.cnbc.com/id/19854910/device/rss/rss.html"
     },
     "yahoo": {
       "name": "Yahoo Finance",
+      "enabled": true,
       "top": "https://finance.yahoo.com/news/rssindex"
     }
   },
   "markets": {
     "us": {
       "name": "US Markets",
+      "enabled": true,
       "indices": ["^GSPC", "^DJI", "^IXIC"],
       "index_names": {"^GSPC": "S&P 500", "^DJI": "Dow Jones", "^IXIC": "NASDAQ"}
     },
     "europe": {
       "name": "Europe",
+      "enabled": true,
       "indices": ["^GDAXI", "^STOXX50E", "^FTSE"],
       "index_names": {"^GDAXI": "DAX", "^STOXX50E": "STOXX 50", "^FTSE": "FTSE 100"}
     },
     "japan": {
       "name": "Japan",
+      "enabled": true,
       "indices": ["^N225"],
       "index_names": {"^N225": "Nikkei 225"}
     }
@@ -43,5 +49,29 @@
   "language": {
     "default": "en",
     "supported": ["en", "de"]
+  },
+  "delivery": {
+    "whatsapp": {
+      "enabled": true,
+      "group": "Niemand Boerse"
+    },
+    "telegram": {
+      "enabled": false,
+      "group": ""
+    }
+  },
+  "schedule": {
+    "morning": {
+      "enabled": true,
+      "cron": "30 6 * * 1-5",
+      "timezone": "America/Los_Angeles",
+      "description": "US Market Open (9:30 AM ET = 6:30 AM PT)"
+    },
+    "evening": {
+      "enabled": true,
+      "cron": "0 13 * * 1-5",
+      "timezone": "America/Los_Angeles",
+      "description": "US Market Close (4:00 PM ET = 1:00 PM PT)"
+    }
   }
 }
