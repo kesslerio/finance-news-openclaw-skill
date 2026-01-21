@@ -248,16 +248,28 @@ def get_portfolio_news(limit: int = 5, max_stocks: int = 5) -> dict:
         
         if result.returncode != 0:
             print(f"❌ Failed to load portfolio: {result.stderr}", file=sys.stderr)
-            return {'fetched_at': datetime.now().isoformat(), 'stocks': {}}
+            return {
+                'fetched_at': datetime.now().isoformat(),
+                'stocks': {},
+                'error': f"Portfolio load failed: {result.stderr}"
+            }
         
         symbols = result.stdout.strip().split(',')
     
     except subprocess.TimeoutExpired:
         print("❌ Portfolio fetch timeout", file=sys.stderr)
-        return {'fetched_at': datetime.now().isoformat(), 'stocks': {}}
+        return {
+            'fetched_at': datetime.now().isoformat(),
+            'stocks': {},
+            'error': 'Portfolio fetch timeout'
+        }
     except Exception as e:
         print(f"❌ Portfolio error: {e}", file=sys.stderr)
-        return {'fetched_at': datetime.now().isoformat(), 'stocks': {}}
+        return {
+            'fetched_at': datetime.now().isoformat(),
+            'stocks': {},
+            'error': str(e)
+        }
     
     # Limit to max 5 stocks for briefings (performance)
     if max_stocks and len(symbols) > max_stocks:
@@ -286,6 +298,12 @@ def get_portfolio_news(limit: int = 5, max_stocks: int = 5) -> dict:
 def fetch_portfolio_news(args):
     """Fetch news for portfolio stocks."""
     news = get_portfolio_news(args.limit, args.max_stocks)
+    
+    # Check for errors (P2 fix: preserve non-zero exit on failure)
+    if 'error' in news:
+        if not args.json:
+            print(f"\n❌ Error: {news['error']}", file=sys.stderr)
+        sys.exit(1)
     
     if args.json:
         print(json.dumps(news, indent=2))

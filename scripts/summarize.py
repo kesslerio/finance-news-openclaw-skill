@@ -154,8 +154,11 @@ def generate_briefing(args):
         if market_data.get('headlines'):
             content_parts.append(format_headlines(market_data['headlines']))
     
-    if portfolio_data:
+    # Only include portfolio if fetch succeeded (no error key)
+    if portfolio_data and 'error' not in portfolio_data:
         content_parts.append(format_portfolio_news(portfolio_data))
+    elif portfolio_data and 'error' in portfolio_data:
+        print(f"⚠️ Skipping portfolio: {portfolio_data['error']}", file=sys.stderr)
     
     content = '\n\n'.join(content_parts)
     
