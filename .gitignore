@@ -17,3 +17,7 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Sensitive credentials
+config/cookies.json
+*.cookie
