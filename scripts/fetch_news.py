@@ -5,6 +5,8 @@ News Fetcher - Aggregate news from multiple sources.
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -19,6 +21,52 @@ CACHE_DIR = SCRIPT_DIR.parent / "cache"
 
 # Ensure cache directory exists
 CACHE_DIR.mkdir(exist_ok=True)
+
+
+def get_openbb_binary() -> str:
+    """
+    Find openbb-quote binary.
+    
+    Checks (in order):
+    1. OPENBB_QUOTE_BIN environment variable
+    2. PATH via shutil.which()
+    
+    Returns:
+        Path to openbb-quote binary
+        
+    Raises:
+        RuntimeError: If openbb-quote is not found
+    """
+    # Check env var override
+    env_path = os.environ.get('OPENBB_QUOTE_BIN')
+    if env_path:
+        if os.path.isfile(env_path) and os.access(env_path, os.X_OK):
+            return env_path
+        else:
+            print(f"⚠️ OPENBB_QUOTE_BIN={env_path} is not a valid executable", file=sys.stderr)
+    
+    # Check PATH
+    binary = shutil.which('openbb-quote')
+    if binary:
+        return binary
+    
+    # Not found - show helpful error
+    raise RuntimeError(
+        "openbb-quote not found!\n\n"
+        "Installation options:\n"
+        "1. Install via pip: pip install openbb\n"
+        "2. Use existing install: export OPENBB_QUOTE_BIN=/path/to/openbb-quote\n"
+        "3. Add to PATH: export PATH=$PATH:/home/art/.local/bin\n\n"
+        "See: https://github.com/kesslerio/finance-news-clawdbot-skill#dependencies"
+    )
+
+
+# Cache the binary path on module load
+try:
+    OPENBB_BINARY = get_openbb_binary()
+except RuntimeError as e:
+    print(f"❌ {e}", file=sys.stderr)
+    OPENBB_BINARY = None
 
 
 def load_sources():
@@ -61,10 +109,15 @@ def fetch_market_data(symbols: list[str]) -> dict:
     """Fetch market data using openbb-quote."""
     results = {}
     
+    # Check if openbb-quote is available
+    if OPENBB_BINARY is None:
+        print("❌ openbb-quote not available - skipping market data fetch", file=sys.stderr)
+        return results
+    
     for symbol in symbols:
         try:
             result = subprocess.run(
-                ['/home/art/.local/bin/openbb-quote', symbol],
+                [OPENBB_BINARY, symbol],
                 capture_output=True,
                 text=True,
                 stdin=subprocess.DEVNULL,
