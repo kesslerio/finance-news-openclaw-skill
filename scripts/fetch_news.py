@@ -469,6 +469,171 @@ def fetch_portfolio_news(args):
                 print(f"  • {article['title'][:80]}...")
 
 
+def get_portfolio_symbols() -> list[str]:
+    """Get list of portfolio symbols."""
+    try:
+        result = subprocess.run(
+            ['python3', str(SCRIPT_DIR / 'portfolio.py'), 'symbols'],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=10,
+            check=False
+        )
+        if result.returncode == 0:
+            return [s.strip() for s in result.stdout.strip().split(',') if s.strip()]
+    except Exception:
+        pass
+    return []
+
+
+def deduplicate_news(articles: list[dict]) -> list[dict]:
+    """Remove duplicate news by URL, fallback to title+date."""
+    seen = set()
+    unique = []
+    for article in articles:
+        url = article.get('link', '')
+        if not url:
+            key = f"{article.get('title', '')}|{article.get('date', '')}"
+        else:
+            key = url
+        if key not in seen:
+            seen.add(key)
+            unique.append(article)
+    return unique
+
+
+def get_portfolio_only_news(limit_per_ticker: int = 5) -> dict:
+    """
+    Get portfolio news with top 5 gainers and 5 losers, plus news per ticker.
+    
+    Args:
+        limit_per_ticker: Max news items per ticker (default: 5)
+    
+    Returns:
+        dict with 'gainers', 'losers' (each: list of tickers with price + news)
+    """
+    symbols = get_portfolio_symbols()
+    if not symbols:
+        return {'error': 'No portfolio symbols found', 'gainers': [], 'losers': []}
+    
+    # Fetch prices for all symbols
+    quotes = fetch_market_data(symbols)
+    
+    # Build list of (symbol, change_pct)
+    tickers_with_prices = []
+    for symbol in symbols:
+        quote = quotes.get(symbol, {})
+        price = quote.get('price')
+        prev_close = quote.get('prev_close', 0)
+        open_price = quote.get('open', 0)
+        
+        if price and prev_close and prev_close != 0:
+            change_pct = ((price - prev_close) / prev_close) * 100
+        elif price and open_price and open_price != 0:
+            change_pct = ((price - open_price) / open_price) * 100
+        else:
+            change_pct = 0
+        
+        tickers_with_prices.append({
+            'symbol': symbol,
+            'price': price,
+            'change_pct': change_pct,
+            'quote': quote
+        })
+    
+    # Sort by change_pct
+    sorted_tickers = sorted(tickers_with_prices, key=lambda x: x['change_pct'], reverse=True)
+    
+    # Get top 5 gainers and 5 losers
+    gainers = sorted_tickers[:5]
+    losers = sorted_tickers[-5:][::-1]  # Reverse to show biggest loser first
+    
+    # Fetch news for each ticker
+    for ticker_list in [gainers, losers]:
+        for ticker in ticker_list:
+            symbol = ticker['symbol']
+            # Try RSS first
+            articles = fetch_ticker_news(symbol, limit_per_ticker)
+            if not articles:
+                # Fallback to web search if no RSS
+                articles = web_search_news(symbol, limit_per_ticker)
+            ticker['news'] = deduplicate_news(articles)
+    
+    return {
+        'fetched_at': datetime.now().isoformat(),
+        'gainers': gainers,
+        'losers': losers
+    }
+
+
+def web_search_news(symbol: str, limit: int = 5) -> list[dict]:
+    """Fallback: search for news via web search."""
+    articles = []
+    try:
+        result = subprocess.run(
+            ['web-search', f'{symbol} stock news today', '--count', str(limit)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False
+        )
+        if result.returncode == 0:
+            import json as json_mod
+            data = json_mod.loads(result.stdout)
+            for item in data.get('results', [])[:limit]:
+                articles.append({
+                    'title': item.get('title', ''),
+                    'link': item.get('url', ''),
+                    'source': item.get('site', 'Web'),
+                    'date': '',
+                    'description': ''
+                })
+    except Exception as e:
+        print(f"⚠️ Web search failed for {symbol}: {e}", file=sys.stderr)
+    return articles
+
+
+def fetch_portfolio_only(args):
+    """Fetch portfolio-only news (top 5 gainers + top 5 losers with news)."""
+    result = get_portfolio_only_news(limit_per_ticker=args.limit)
+    
+    if 'error' in result:
+        print(f"\n❌ Error: {result['error']}", file=sys.stderr)
+        sys.exit(1)
+    
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+    
+    # Text output
+    def format_ticker(ticker: dict):
+        symbol = ticker['symbol']
+        price = ticker.get('price')
+        change = ticker['change_pct']
+        emoji = '📈' if change >= 0 else '📉'
+        price_str = f"${price:.2f}" if price else 'N/A'
+        lines = [f"**{symbol}** {emoji} {price_str} ({change:+.2f}%)"]
+        if ticker.get('news'):
+            for article in ticker['news'][:args.limit]:
+                source = article.get('source', 'Unknown')
+                title = article.get('title', '')[:70]
+                lines.append(f"  • [{source}] {title}...")
+        else:
+            lines.append("  • No recent news")
+        return '\n'.join(lines)
+    
+    print("\n🚀 **Top Gainers**\n")
+    for ticker in result['gainers']:
+        print(format_ticker(ticker))
+        print()
+    
+    print("\n📉 **Top Losers**\n")
+    for ticker in result['losers']:
+        print(format_ticker(ticker))
+        print()
+
+
 def main():
     parser = argparse.ArgumentParser(description='News Fetcher')
     subparsers = parser.add_subparsers(dest='command', required=True)
@@ -493,6 +658,12 @@ def main():
     portfolio_parser.add_argument('--limit', type=int, default=5, help='Max articles per source')
     portfolio_parser.add_argument('--max-stocks', type=int, default=5, help='Max stocks to fetch (default: 5)')
     portfolio_parser.set_defaults(func=fetch_portfolio_news)
+    
+    # Portfolio-only news (top 5 gainers + top 5 losers)
+    portfolio_only_parser = subparsers.add_parser('portfolio-only', help='Top 5 gainers + top 5 losers with news')
+    portfolio_only_parser.add_argument('--json', action='store_true', help='Output as JSON')
+    portfolio_only_parser.add_argument('--limit', type=int, default=5, help='Max news items per ticker')
+    portfolio_only_parser.set_defaults(func=fetch_portfolio_only)
     
     args = parser.parse_args()
     args.func(args)
