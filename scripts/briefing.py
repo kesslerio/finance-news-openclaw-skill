@@ -74,6 +74,8 @@ def generate_and_send(args):
     
     timeout = args.deadline if args.deadline is not None else 300
     timeout = max(1, int(timeout))
+    if args.deadline is not None:
+        timeout = timeout + 5
     result = subprocess.run(
         cmd,
         capture_output=True,

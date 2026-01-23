@@ -349,7 +349,11 @@ def generate_briefing(args):
     language = args.lang or config['language']['default']
     fast_mode = args.fast or os.environ.get("FINANCE_NEWS_FAST") == "1"
     env_deadline = os.environ.get("FINANCE_NEWS_DEADLINE_SEC")
-    default_deadline = int(env_deadline) if env_deadline else 300
+    try:
+        default_deadline = int(env_deadline) if env_deadline else 300
+    except ValueError:
+        print("⚠️ Invalid FINANCE_NEWS_DEADLINE_SEC; using default 300s", file=sys.stderr)
+        default_deadline = 300
     deadline_sec = args.deadline if args.deadline is not None else default_deadline
     deadline = compute_deadline(deadline_sec)
     rss_timeout = int(os.environ.get("FINANCE_NEWS_RSS_TIMEOUT_SEC", "15"))

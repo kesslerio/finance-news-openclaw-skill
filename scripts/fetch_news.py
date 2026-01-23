@@ -456,7 +456,8 @@ def get_portfolio_news(
     
     for symbol in symbols:
         if time_left(deadline) is not None and time_left(deadline) <= 0:
-            raise PortfolioError("Deadline exceeded while fetching portfolio news")
+            print("⚠️ Deadline exceeded; returning partial portfolio news", file=sys.stderr)
+            break
         if not symbol:
             continue
         
