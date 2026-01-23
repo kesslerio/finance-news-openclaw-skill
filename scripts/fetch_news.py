@@ -11,10 +11,12 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+import ssl
 import urllib.request
 import urllib.error
 
 import feedparser
+import certifi
 
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_DIR = SCRIPT_DIR.parent / "config"
@@ -22,6 +24,8 @@ CACHE_DIR = SCRIPT_DIR.parent / "cache"
 
 # Ensure cache directory exists
 CACHE_DIR.mkdir(exist_ok=True)
+
+SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 
 class PortfolioError(Exception):
@@ -139,7 +143,7 @@ def fetch_rss(url: str, limit: int = 10) -> list[dict]:
     try:
         # Fetch feed content first (handles SSL/certs properly)
         req = urllib.request.Request(url, headers={'User-Agent': 'Clawdbot/1.0'})
-        with urllib.request.urlopen(req, timeout=15) as response:
+        with urllib.request.urlopen(req, timeout=15, context=SSL_CONTEXT) as response:
             content = response.read()
         
         # Parse with feedparser (handles RSS and Atom formats)
