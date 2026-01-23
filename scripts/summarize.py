@@ -20,38 +20,38 @@ DEFAULT_PORTFOLIO_SAMPLE_SIZE = 3
 MAX_HEADLINES_IN_PROMPT = 10
 
 LANG_PROMPTS = {
-    "de": "Antworte auf Deutsch.",
-    "en": "Respond in English."
+    "de": "Output must be in German only.",
+    "en": "Output must be in English only."
 }
 
 STYLE_PROMPTS = {
-    "briefing": """Du bist ein Finanzanalyst. Erstelle ein prägnantes Markt-Briefing.
+    "briefing": """You are a financial analyst. Create a concise market briefing.
 
-WICHTIG:
-- Verwende ausschließlich die bereitgestellten Marktdaten und Schlagzeilen.
-- Keine Spekulationen, keine erfundenen Zahlen, keine externen Fakten.
-- Wenn Informationen fehlen, schreibe klar: "Keine Daten verfügbar".
-- Schreibe ausschließlich auf Deutsch.
+IMPORTANT:
+- Use only the provided market data and headlines.
+- No speculation, no invented numbers, no external facts.
+- If information is missing, say clearly: "Keine Daten verfügbar".
+- Follow the language constraint exactly.
 
-Struktur:
-1) Marktstimmung (bullisch/bärisch/neutral) mit kurzer Begründung aus den Daten
-2) Top 3 Schlagzeilen als nummerierte Liste mit Quelle in eckigen Klammern
-3) Portfolio-Auswirkungen (nur wenn Portfolio-Daten vorhanden)
-4) Kurze Handlungsempfehlung
+Structure:
+1) Market sentiment (bullish/bearish/neutral) with a short rationale from the data
+2) Top 3 headlines as a numbered list with source tags in brackets
+3) Portfolio impact (only if portfolio data exists)
+4) Short action recommendation
 
-Maximal 200 Wörter. Emojis sparsam.""",
+Max 200 words. Use emojis sparingly.""",
 
-    "analysis": """Du bist ein erfahrener Finanzanalyst.
-Analysiere die Nachrichten und gib:
-- Detaillierte Marktanalyse
-- Sektortrends
-- Risiken und Chancen
-- Konkrete Empfehlungen
+    "analysis": """You are an experienced financial analyst.
+Analyze the news and provide:
+- Detailed market analysis
+- Sector trends
+- Risks and opportunities
+- Concrete recommendations
 
-Sei professionell aber verständlich.""",
+Be professional but clear.""",
 
-    "headlines": """Fasse die wichtigsten Schlagzeilen in 5 Bulletpoints zusammen.
-Jeder Punkt sollte maximal 15 Wörter haben."""
+    "headlines": """Summarize the most important headlines in 5 bullet points.
+Each bullet must be at most 15 words."""
 }
 
 
@@ -98,7 +98,7 @@ def summarize_with_claude(content: str, language: str = "de", style: str = "brie
 
 {LANG_PROMPTS.get(language, LANG_PROMPTS['de'])}
 
-Nutze die folgenden Informationen für das Briefing:
+Use only the following information for the briefing:
 
 {content}
 """
@@ -136,7 +136,7 @@ def summarize_with_minimax(content: str, language: str = "de", style: str = "bri
 
 {LANG_PROMPTS.get(language, LANG_PROMPTS['de'])}
 
-Nutze die folgenden Informationen für das Briefing:
+Use only the following information for the briefing:
 
 {content}
 """
@@ -176,7 +176,7 @@ def summarize_with_gemini(content: str, language: str = "de", style: str = "brie
 
 {LANG_PROMPTS.get(language, LANG_PROMPTS['de'])}
 
-Hier sind die aktuellen Marktnachrichten:
+Here are the current market items:
 
 {content}
 """

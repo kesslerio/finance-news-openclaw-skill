@@ -97,35 +97,35 @@ Fokusbereiche für die Recherche:
 Gehe bei jedem Punkt tief ins Detail.
 """
     
-    prompt = f"""Du bist ein erfahrener Investment-Research-Analyst.
+    prompt = f"""You are an experienced investment research analyst.
 
-Deine Aufgabe ist es, tiefgehende Recherche zu aktuellen Marktentwicklungen zu liefern.
+Your task is to deliver deep research on current market developments.
 
 {focus_prompt}
-Bitte analysiere folgende Marktdaten:
+Please analyze the following market data:
 
 {content}
 
-## Analyse-Anforderungen:
+## Analysis Requirements:
 
-1. **Makrotrends**: Was treibt den Markt heute? Welche Wirtschaftsdaten/Entscheidungen sind relevant?
+1. **Macro Trends**: What is driving the market today? Which economic data/decisions matter?
 
-2. **Sektor-Analyse**: Welche Sektoren performen am besten/schlechtesten? Warum?
+2. **Sector Analysis**: Which sectors are performing best/worst? Why?
 
-3. **Unternehmens-Nachrichten**: Relevante Earnings, Übernahmen, Produkt-Launches?
+3. **Company News**: Relevant earnings, M&A, product launches?
 
-4. **Risiken**: Welche Abwärtsrisiken sollten beachtet werden?
+4. **Risks**: What downside risks should be noted?
 
-5. **Chancen**: Welche positiven Entwicklungen bieten Opportunitäten?
+5. **Opportunities**: Which positive developments offer opportunities?
 
-6. **Korrelationen**: Gibt es Zusammenhänge zwischen verschiedenen Nachrichten/Asset-Klassen?
+6. **Correlations**: Are there links between different news items/asset classes?
 
-7. **Handels-Ideen**: Konkrete Setups basierend auf der Analyse (keine Finanzberatung!)
+7. **Trade Ideas**: Concrete setups based on the analysis (not financial advice!)
 
-8. **Quellen**: Original-Links für weitere Recherche
+8. **Sources**: Original links for further research
 
-Sei analytisch, objektiv und meinungsstark wo es angebracht ist.
-Liefere einen substanziellen Bericht (500-800 Wörter).
+Be analytical, objective, and opinionated where appropriate.
+Deliver a substantial report (500-800 words).
 """
 
     try:
