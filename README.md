@@ -23,6 +23,9 @@ finance-news briefing --morning --lang de
 # Use LLM summaries (optional)
 finance-news briefing --morning --lang de --llm
 
+# Use fast mode + deadline (recommended for gateway)
+finance-news briefing --morning --lang de --fast --deadline 300
+
 # View market overview
 finance-news market
 

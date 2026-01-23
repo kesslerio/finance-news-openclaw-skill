@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 import ssl
@@ -142,12 +143,36 @@ def _get_best_feed_url(feeds: dict) -> str | None:
     return None
 
 
-def fetch_rss(url: str, limit: int = 10) -> list[dict]:
+def _compute_deadline(deadline_sec: int | None) -> float | None:
+    if deadline_sec is None:
+        return None
+    if deadline_sec <= 0:
+        return None
+    return time.monotonic() + deadline_sec
+
+
+def _time_left(deadline: float | None) -> int | None:
+    if deadline is None:
+        return None
+    remaining = int(deadline - time.monotonic())
+    return remaining
+
+
+def _clamp_timeout(default_timeout: int, deadline: float | None, minimum: int = 1) -> int:
+    remaining = _time_left(deadline)
+    if remaining is None:
+        return default_timeout
+    if remaining <= 0:
+        raise TimeoutError("Deadline exceeded")
+    return max(min(default_timeout, remaining), minimum)
+
+
+def fetch_rss(url: str, limit: int = 10, timeout: int = 15) -> list[dict]:
     """Fetch and parse RSS/Atom feed using feedparser."""
     try:
         # Fetch feed content first (handles SSL/certs properly)
         req = urllib.request.Request(url, headers={'User-Agent': 'Clawdbot/1.0'})
-        with urllib.request.urlopen(req, timeout=15, context=SSL_CONTEXT) as response:
+        with urllib.request.urlopen(req, timeout=timeout, context=SSL_CONTEXT) as response:
             content = response.read()
         
         # Parse with feedparser (handles RSS and Atom formats)
@@ -186,7 +211,7 @@ def fetch_rss(url: str, limit: int = 10) -> list[dict]:
         return []
 
 
-def fetch_market_data(symbols: list[str]) -> dict:
+def fetch_market_data(symbols: list[str], timeout: int = 30, deadline: float | None = None) -> dict:
     """Fetch market data using openbb-quote."""
     results = {}
     
@@ -197,12 +222,16 @@ def fetch_market_data(symbols: list[str]) -> dict:
     
     for symbol in symbols:
         try:
+            try:
+                effective_timeout = _clamp_timeout(timeout, deadline)
+            except TimeoutError:
+                return results
             result = subprocess.run(
                 [OPENBB_BINARY, symbol],
                 capture_output=True,
                 text=True,
                 stdin=subprocess.DEVNULL,
-                timeout=30,
+                timeout=effective_timeout,
                 check=False
             )
             if result.returncode == 0:
@@ -316,6 +345,9 @@ def get_market_news(
     limit: int = 5,
     regions: list[str] | None = None,
     max_indices_per_region: int | None = None,
+    deadline: float | None = None,
+    rss_timeout: int = 15,
+    subprocess_timeout: int = 30,
 ) -> dict:
     """Get market overview (indices + top headlines) as data."""
     sources = load_sources()
@@ -328,6 +360,8 @@ def get_market_news(
     
     # Fetch market indices
     for region, config in sources['markets'].items():
+        if _time_left(deadline) is not None and _time_left(deadline) <= 0:
+            break
         if regions is not None and region not in regions:
             continue
 
@@ -341,7 +375,9 @@ def get_market_news(
             symbols = symbols[:max_indices_per_region]
 
         for symbol in symbols:
-            data = fetch_market_data([symbol])
+            if _time_left(deadline) is not None and _time_left(deadline) <= 0:
+                break
+            data = fetch_market_data([symbol], timeout=subprocess_timeout, deadline=deadline)
             if symbol in data:
                 result['markets'][region]['indices'][symbol] = {
                     'name': config['index_names'].get(symbol, symbol),
@@ -350,11 +386,17 @@ def get_market_news(
     
     # Fetch top headlines from CNBC and Yahoo
     for source in ['cnbc', 'yahoo']:
+        if _time_left(deadline) is not None and _time_left(deadline) <= 0:
+            break
         if source in sources['rss_feeds']:
             feeds = sources['rss_feeds'][source]
             feed_url = _get_best_feed_url(feeds)
             if feed_url:
-                articles = fetch_rss(feed_url, limit)
+                try:
+                    effective_timeout = _clamp_timeout(rss_timeout, deadline)
+                except TimeoutError:
+                    break
+                articles = fetch_rss(feed_url, limit, timeout=effective_timeout)
                 for article in articles:
                     article['source'] = feeds.get('name', source)
                 result['headlines'].extend(articles)
@@ -364,7 +406,8 @@ def get_market_news(
 
 def fetch_market_news(args):
     """Fetch market overview (indices + top headlines)."""
-    result = get_market_news(args.limit)
+    deadline = _compute_deadline(args.deadline)
+    result = get_market_news(args.limit, deadline=deadline)
     
     if args.json:
         print(json.dumps(result, indent=2))
@@ -385,18 +428,24 @@ def fetch_market_news(args):
             print(f"• [{article['source']}] {article['title']}")
 
 
-def get_portfolio_news(limit: int = 5, max_stocks: int = 5) -> dict:
+def get_portfolio_news(
+    limit: int = 5,
+    max_stocks: int = 5,
+    deadline: float | None = None,
+    subprocess_timeout: int = 30,
+) -> dict:
     """Get news for portfolio stocks as data."""
     if not (CONFIG_DIR / "portfolio.csv").exists():
         raise PortfolioError("Portfolio config missing: config/portfolio.csv")
     # Get symbols from portfolio
     try:
+        effective_timeout = _clamp_timeout(10, deadline)
         result = subprocess.run(
             ['python3', str(SCRIPT_DIR / 'portfolio.py'), 'symbols'],
             capture_output=True,
             text=True,
             stdin=subprocess.DEVNULL,
-            timeout=10,
+            timeout=effective_timeout,
             check=False
         )
         
@@ -411,6 +460,8 @@ def get_portfolio_news(limit: int = 5, max_stocks: int = 5) -> dict:
     except subprocess.TimeoutExpired:
         print("❌ Portfolio fetch timeout", file=sys.stderr)
         raise PortfolioError("Portfolio fetch timeout")
+    except TimeoutError:
+        raise PortfolioError("Deadline exceeded while fetching portfolio symbols")
     except PortfolioError:
         raise
     except Exception as e:
@@ -428,11 +479,13 @@ def get_portfolio_news(limit: int = 5, max_stocks: int = 5) -> dict:
     }
     
     for symbol in symbols:
+        if _time_left(deadline) is not None and _time_left(deadline) <= 0:
+            raise PortfolioError("Deadline exceeded while fetching portfolio news")
         if not symbol:
             continue
         
         articles = fetch_ticker_news(symbol, limit)
-        quotes = fetch_market_data([symbol])
+        quotes = fetch_market_data([symbol], timeout=subprocess_timeout, deadline=deadline)
         
         news['stocks'][symbol] = {
             'quote': quotes.get(symbol, {}),
@@ -445,7 +498,12 @@ def get_portfolio_news(limit: int = 5, max_stocks: int = 5) -> dict:
 def fetch_portfolio_news(args):
     """Fetch news for portfolio stocks."""
     try:
-        news = get_portfolio_news(args.limit, args.max_stocks)
+        deadline = _compute_deadline(args.deadline)
+        news = get_portfolio_news(
+            args.limit,
+            args.max_stocks,
+            deadline=deadline
+        )
     except PortfolioError as exc:
         if not args.json:
             print(f"\n❌ Error: {exc}", file=sys.stderr)
@@ -663,6 +721,7 @@ def main():
     market_parser = subparsers.add_parser('market', help='Market overview + headlines')
     market_parser.add_argument('--json', action='store_true', help='Output as JSON')
     market_parser.add_argument('--limit', type=int, default=5, help='Max articles per source')
+    market_parser.add_argument('--deadline', type=int, default=None, help='Overall deadline in seconds')
     market_parser.set_defaults(func=fetch_market_news)
     
     # Portfolio news
@@ -670,6 +729,7 @@ def main():
     portfolio_parser.add_argument('--json', action='store_true', help='Output as JSON')
     portfolio_parser.add_argument('--limit', type=int, default=5, help='Max articles per source')
     portfolio_parser.add_argument('--max-stocks', type=int, default=5, help='Max stocks to fetch (default: 5)')
+    portfolio_parser.add_argument('--deadline', type=int, default=None, help='Overall deadline in seconds')
     portfolio_parser.set_defaults(func=fetch_portfolio_news)
     
     # Portfolio-only news (top 5 gainers + top 5 losers)

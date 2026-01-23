@@ -46,6 +46,8 @@ Options:
   --lang <de|en>     Output language (default: de)
   --json             Output as JSON
   --send             Send to WhatsApp group
+  --deadline <sec>   Overall deadline in seconds
+  --fast             Fast mode (shorter timeouts, fewer items)
   --help             Show this help
 
 Examples:

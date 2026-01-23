@@ -59,6 +59,12 @@ def generate_and_send(args):
         '--style', args.style,
         '--lang', args.lang
     ]
+
+    if args.deadline is not None:
+        cmd.extend(['--deadline', str(args.deadline)])
+
+    if args.fast:
+        cmd.append('--fast')
     
     # Pass --json flag if requested
     if args.json:
@@ -66,12 +72,14 @@ def generate_and_send(args):
     
     print(f"📊 Generating {briefing_time} briefing...", file=sys.stderr)
     
+    timeout = args.deadline if args.deadline is not None else 300
+    timeout = max(1, int(timeout))
     result = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         stdin=subprocess.DEVNULL,
-        timeout=300
+        timeout=timeout
     )
     
     if result.returncode != 0:
@@ -116,6 +124,10 @@ def main():
                         help='WhatsApp group name')
     parser.add_argument('--json', action='store_true',
                         help='Output as JSON')
+    parser.add_argument('--deadline', type=int, default=None,
+                        help='Overall deadline in seconds')
+    parser.add_argument('--fast', action='store_true',
+                        help='Use fast mode (shorter timeouts, fewer items)')
     
     args = parser.parse_args()
     generate_and_send(args)

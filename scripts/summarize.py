@@ -6,8 +6,10 @@ Uses Gemini CLI for summarization and translation.
 
 import argparse
 import json
+import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -61,6 +63,30 @@ def load_config():
         return json.load(f)
 
 
+def _compute_deadline(deadline_sec: int | None) -> float | None:
+    if deadline_sec is None:
+        return None
+    if deadline_sec <= 0:
+        return None
+    return time.monotonic() + deadline_sec
+
+
+def _time_left(deadline: float | None) -> int | None:
+    if deadline is None:
+        return None
+    remaining = int(deadline - time.monotonic())
+    return remaining
+
+
+def _clamp_timeout(default_timeout: int, deadline: float | None, minimum: int = 1) -> int:
+    remaining = _time_left(deadline)
+    if remaining is None:
+        return default_timeout
+    if remaining <= 0:
+        raise TimeoutError("Deadline exceeded")
+    return max(min(default_timeout, remaining), minimum)
+
+
 def extract_agent_reply(raw: str) -> str:
     data = None
     try:
@@ -92,7 +118,12 @@ def extract_agent_reply(raw: str) -> str:
     return raw.strip()
 
 
-def summarize_with_claude(content: str, language: str = "de", style: str = "briefing") -> str:
+def summarize_with_claude(
+    content: str,
+    language: str = "de",
+    style: str = "briefing",
+    deadline: float | None = None,
+) -> str:
     """Generate AI summary using Claude via Clawdbot agent."""
     prompt = f"""{STYLE_PROMPTS.get(style, STYLE_PROMPTS['briefing'])}
 
@@ -104,20 +135,24 @@ Use only the following information for the briefing:
 """
 
     try:
+        cli_timeout = _clamp_timeout(120, deadline)
+        proc_timeout = _clamp_timeout(150, deadline)
         result = subprocess.run(
             [
                 'clawdbot', 'agent',
                 '--session-id', 'finance-news-briefing',
                 '--message', prompt,
                 '--json',
-                '--timeout', '120'
+                '--timeout', str(cli_timeout)
             ],
             capture_output=True,
             text=True,
-            timeout=150
+            timeout=proc_timeout
         )
     except subprocess.TimeoutExpired:
         return "⚠️ Claude briefing error: timeout"
+    except TimeoutError:
+        return "⚠️ Claude briefing error: deadline exceeded"
     except FileNotFoundError:
         return "⚠️ Claude briefing error: clawdbot CLI not found"
     except OSError as exc:
@@ -130,7 +165,12 @@ Use only the following information for the briefing:
     return f"⚠️ Claude briefing error: {stderr}"
 
 
-def summarize_with_minimax(content: str, language: str = "de", style: str = "briefing") -> str:
+def summarize_with_minimax(
+    content: str,
+    language: str = "de",
+    style: str = "briefing",
+    deadline: float | None = None,
+) -> str:
     """Generate AI summary using MiniMax model via clawdbot agent."""
     prompt = f"""{STYLE_PROMPTS.get(style, STYLE_PROMPTS['briefing'])}
 
@@ -142,6 +182,8 @@ Use only the following information for the briefing:
 """
 
     try:
+        cli_timeout = _clamp_timeout(120, deadline)
+        proc_timeout = _clamp_timeout(150, deadline)
         result = subprocess.run(
             [
                 'clawdbot', 'agent',
@@ -149,14 +191,16 @@ Use only the following information for the briefing:
                 '--message', prompt,
                 '--model', 'minimax',
                 '--json',
-                '--timeout', '120'
+                '--timeout', str(cli_timeout)
             ],
             capture_output=True,
             text=True,
-            timeout=150
+            timeout=proc_timeout
         )
     except subprocess.TimeoutExpired:
         return "⚠️ MiniMax briefing error: timeout"
+    except TimeoutError:
+        return "⚠️ MiniMax briefing error: deadline exceeded"
     except FileNotFoundError:
         return "⚠️ MiniMax briefing error: clawdbot CLI not found"
     except OSError as exc:
@@ -169,7 +213,12 @@ Use only the following information for the briefing:
     return f"⚠️ MiniMax briefing error: {stderr}"
 
 
-def summarize_with_gemini(content: str, language: str = "de", style: str = "briefing") -> str:
+def summarize_with_gemini(
+    content: str,
+    language: str = "de",
+    style: str = "briefing",
+    deadline: float | None = None,
+) -> str:
     """Generate AI summary using Gemini CLI."""
     
     prompt = f"""{STYLE_PROMPTS.get(style, STYLE_PROMPTS['briefing'])}
@@ -182,11 +231,12 @@ Here are the current market items:
 """
     
     try:
+        proc_timeout = _clamp_timeout(60, deadline)
         result = subprocess.run(
             ['gemini', prompt],
             capture_output=True,
             text=True,
-            timeout=60
+            timeout=proc_timeout
         )
         
         if result.returncode == 0:
@@ -196,6 +246,8 @@ Here are the current market items:
     
     except subprocess.TimeoutExpired:
         return "⚠️ Gemini timeout"
+    except TimeoutError:
+        return "⚠️ Gemini timeout: deadline exceeded"
     except FileNotFoundError:
         return "⚠️ Gemini CLI not found. Install: brew install gemini-cli"
 
@@ -319,20 +371,40 @@ def generate_briefing(args):
     """Generate full market briefing."""
     config = load_config()
     language = args.lang or config['language']['default']
+    fast_mode = args.fast or os.environ.get("FINANCE_NEWS_FAST") == "1"
+    env_deadline = os.environ.get("FINANCE_NEWS_DEADLINE_SEC")
+    default_deadline = int(env_deadline) if env_deadline else 300
+    deadline_sec = args.deadline if args.deadline is not None else default_deadline
+    deadline = _compute_deadline(deadline_sec)
+    rss_timeout = int(os.environ.get("FINANCE_NEWS_RSS_TIMEOUT_SEC", "15"))
+    subprocess_timeout = int(os.environ.get("FINANCE_NEWS_SUBPROCESS_TIMEOUT_SEC", "30"))
+
+    if fast_mode:
+        rss_timeout = int(os.environ.get("FINANCE_NEWS_RSS_TIMEOUT_FAST_SEC", "8"))
+        subprocess_timeout = int(os.environ.get("FINANCE_NEWS_SUBPROCESS_TIMEOUT_FAST_SEC", "15"))
     
     # Fetch fresh data
     print("📡 Fetching market data...", file=sys.stderr)
     
     # Get market overview
     market_data = get_market_news(
-        3,
+        2 if fast_mode else 3,
         regions=["us", "europe"],
-        max_indices_per_region=1
+        max_indices_per_region=1,
+        deadline=deadline,
+        rss_timeout=rss_timeout,
+        subprocess_timeout=subprocess_timeout,
     )
     
     # Get portfolio news (limit stocks for performance)
     try:
-        portfolio_data = get_portfolio_news(2, DEFAULT_PORTFOLIO_SAMPLE_SIZE)
+        max_stocks = 2 if fast_mode else DEFAULT_PORTFOLIO_SAMPLE_SIZE
+        portfolio_data = get_portfolio_news(
+            2,
+            max_stocks,
+            deadline=deadline,
+            subprocess_timeout=subprocess_timeout,
+        )
     except PortfolioError as exc:
         print(f"⚠️ Skipping portfolio: {exc}", file=sys.stderr)
         portfolio_data = None
@@ -357,6 +429,10 @@ def generate_briefing(args):
 
     if not market_data.get('headlines'):
         print("⚠️ No headlines available; skipping summary generation", file=sys.stderr)
+        return
+
+    if _time_left(deadline) is not None and _time_left(deadline) <= 0:
+        print("⚠️ Deadline exceeded; skipping summary generation", file=sys.stderr)
         return
 
     research_report = ''
@@ -387,23 +463,23 @@ def generate_briefing(args):
 
         # Generate summary based on selected model
         if model == 'minimax':
-            summary = summarize_with_minimax(content, language, args.style)
+            summary = summarize_with_minimax(content, language, args.style, deadline=deadline)
             if summary.startswith("⚠️ MiniMax briefing error"):
                 print(summary, file=sys.stderr)
                 print("⚠️ MiniMax failed; falling back to Claude...", file=sys.stderr)
-                summary = summarize_with_claude(content, language, args.style)
+                summary = summarize_with_claude(content, language, args.style, deadline=deadline)
                 if summary.startswith("⚠️ Claude briefing error"):
                     print(summary, file=sys.stderr)
                     print("⚠️ Claude also failed; falling back to Gemini...", file=sys.stderr)
-                    summary = summarize_with_gemini(content, language, args.style)
+                    summary = summarize_with_gemini(content, language, args.style, deadline=deadline)
         elif model == 'gemini':
-            summary = summarize_with_gemini(content, language, args.style)
+            summary = summarize_with_gemini(content, language, args.style, deadline=deadline)
         else:  # claude (default)
-            summary = summarize_with_claude(content, language, args.style)
+            summary = summarize_with_claude(content, language, args.style, deadline=deadline)
             if summary.startswith("⚠️ Claude briefing error"):
                 print(summary, file=sys.stderr)
                 print("⚠️ Claude failed; falling back to Gemini summarizer", file=sys.stderr)
-                summary = summarize_with_gemini(content, language, args.style)
+                summary = summarize_with_gemini(content, language, args.style, deadline=deadline)
     
     # Format output
     time_str = datetime.now().strftime("%H:%M")
@@ -454,6 +530,8 @@ def main():
     parser.add_argument('--json', action='store_true', help='Output as JSON')
     parser.add_argument('--research', action='store_true', help='Include deep research section (slower)')
     parser.add_argument('--llm', action='store_true', help='Use LLM for briefing (default: deterministic)')
+    parser.add_argument('--deadline', type=int, default=None, help='Overall deadline in seconds')
+    parser.add_argument('--fast', action='store_true', help='Use fast mode (shorter timeouts, fewer items)')
 
     args = parser.parse_args()
     generate_briefing(args)
