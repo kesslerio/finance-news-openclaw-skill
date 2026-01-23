@@ -17,8 +17,11 @@ AI-powered market news briefings with configurable language output and automated
 # First-time setup (interactive wizard)
 finance-news setup
 
-# Generate a briefing
+# Generate a briefing (deterministic by default)
 finance-news briefing --morning --lang de
+
+# Use LLM summaries (optional)
+finance-news briefing --morning --lang de --llm
 
 # View market overview
 finance-news market
