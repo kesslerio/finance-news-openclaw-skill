@@ -40,7 +40,15 @@ finance-news portfolio
    ln -sf ~/clawd/skills/finance-news/scripts/finance-news ~/.local/bin/finance-news
    ```
 
-3. Run setup wizard:
+3. Install Python dependencies:
+   ```bash
+   cd ~/clawd/skills/finance-news
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
+
+4. Run setup wizard:
    ```bash
    finance-news setup
    ```
@@ -80,6 +88,7 @@ Briefings are sent to your configured WhatsApp group in German.
 ## Dependencies
 
 - Python 3.10+
+- feedparser (`pip install -r requirements.txt`)
 - [Gemini CLI](https://github.com/google/generative-ai-cli) for AI summaries
 - OpenBB (optional, for enhanced market data)
 - Clawdbot for WhatsApp delivery

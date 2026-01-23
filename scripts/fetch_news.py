@@ -4,7 +4,6 @@ News Fetcher - Aggregate news from multiple sources.
 """
 
 import argparse
-import feedparser
 import json
 import os
 import shutil
@@ -14,6 +13,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import urllib.request
 import urllib.error
+
+try:
+    import feedparser
+except ModuleNotFoundError:
+    print("❌ Missing dependency: feedparser. Install with: pip install -r requirements.txt", file=sys.stderr)
+    sys.exit(1)
 
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_DIR = SCRIPT_DIR.parent / "config"
