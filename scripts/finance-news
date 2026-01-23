@@ -35,6 +35,7 @@ Commands:
   briefing [--morning|--evening]  Generate market briefing
   market                          Market overview (indices + headlines)
   portfolio                       News for portfolio stocks
+  portfolio-only                  Top gainers/losers from portfolio with news
   news <SYMBOL>                   News for specific ticker
   
   portfolio-list                  List portfolio stocks
@@ -72,6 +73,11 @@ case "${1:-}" in
   portfolio)
     shift
     "$PYTHON_BIN" "$SCRIPT_DIR/fetch_news.py" portfolio "$@"
+    ;;
+
+  portfolio-only)
+    shift
+    "$PYTHON_BIN" "$SCRIPT_DIR/fetch_news.py" portfolio-only "$@"
     ;;
   
   news)
