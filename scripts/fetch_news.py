@@ -199,9 +199,15 @@ def fetch_market_data(symbols: list[str]) -> dict:
             )
             if result.returncode == 0:
                 data = json.loads(result.stdout)
+
+                # Normalize provider output
+                if isinstance(data, dict) and "results" in data and isinstance(data["results"], list):
+                    data = data["results"][0] if data["results"] else {}
+                elif isinstance(data, list):
+                    data = data[0] if data else {}
                 
                 # Calculate change_percent if null (openbb-quote doesn't always provide it)
-                if data.get('change_percent') is None and data.get('price') and data.get('prev_close'):
+                if isinstance(data, dict) and data.get('change_percent') is None and data.get('price') and data.get('prev_close'):
                     price = data['price']
                     prev_close = data['prev_close']
                     
