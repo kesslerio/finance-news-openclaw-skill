@@ -17,6 +17,7 @@ from research import generate_research_content
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_DIR = SCRIPT_DIR.parent / "config"
 DEFAULT_PORTFOLIO_SAMPLE_SIZE = 3
+MAX_HEADLINES_IN_PROMPT = 10
 
 LANG_PROMPTS = {
     "de": "Antworte auf Deutsch.",
@@ -24,14 +25,21 @@ LANG_PROMPTS = {
 }
 
 STYLE_PROMPTS = {
-    "briefing": """Du bist ein Finanzanalyst, der einen prägnanten Markt-Briefing erstellt.
-Fasse die wichtigsten Punkte zusammen:
-- Marktstimmung (bullisch/bärisch/neutral)
-- Top 3 wichtigste Nachrichten
-- Auswirkungen auf das Portfolio
-- Kurze Handlungsempfehlung
+    "briefing": """Du bist ein Finanzanalyst. Erstelle ein prägnantes Markt-Briefing.
 
-Halte es unter 200 Wörtern. Verwende Emojis sparsam für Lesbarkeit.""",
+WICHTIG:
+- Verwende ausschließlich die bereitgestellten Marktdaten und Schlagzeilen.
+- Keine Spekulationen, keine erfundenen Zahlen, keine externen Fakten.
+- Wenn Informationen fehlen, schreibe klar: "Keine Daten verfügbar".
+- Schreibe ausschließlich auf Deutsch.
+
+Struktur:
+1) Marktstimmung (bullisch/bärisch/neutral) mit kurzer Begründung aus den Daten
+2) Top 3 Schlagzeilen als nummerierte Liste mit Quelle in eckigen Klammern
+3) Portfolio-Auswirkungen (nur wenn Portfolio-Daten vorhanden)
+4) Kurze Handlungsempfehlung
+
+Maximal 200 Wörter. Emojis sparsam.""",
 
     "analysis": """Du bist ein erfahrener Finanzanalyst.
 Analysiere die Nachrichten und gib:
@@ -211,12 +219,12 @@ def format_market_data(market_data: dict) -> str:
 def format_headlines(headlines: list) -> str:
     """Format headlines for the prompt."""
     lines = ["## Schlagzeilen\n"]
-    
-    for article in headlines[:15]:
+
+    for article in headlines[:MAX_HEADLINES_IN_PROMPT]:
         source = article.get('source', 'Unknown')
         title = article.get('title', '')
         lines.append(f"- [{source}] {title}")
-    
+
     return '\n'.join(lines)
 
 
@@ -278,6 +286,10 @@ def generate_briefing(args):
         print("⚠️ No data available for briefing", file=sys.stderr)
         return
 
+    if not market_data.get('headlines'):
+        print("⚠️ No headlines available; skipping summary generation", file=sys.stderr)
+        return
+
     research_report = ''
     source = 'none'
     if args.research:
@@ -327,9 +339,13 @@ def generate_briefing(args):
     if args.time == "morning":
         emoji = "🌅"
         title = "Morgen-Briefing"
-    else:
+    elif args.time == "evening":
         emoji = "🌆"
         title = "Abend-Briefing"
+    else:
+        hour = datetime.now().hour
+        emoji = "🌅" if hour < 12 else "🌆"
+        title = "Morgen-Briefing" if hour < 12 else "Abend-Briefing"
     
     output = f"""{emoji} **Börsen-{title}**
 {date_str} | {time_str} Uhr
