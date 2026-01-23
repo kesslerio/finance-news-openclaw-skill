@@ -254,6 +254,12 @@ def classify_sentiment(market_data: dict) -> str:
             change = data.get("change_percent")
             if isinstance(change, (int, float)):
                 changes.append(change)
+                continue
+
+            price = data.get("price")
+            prev_close = data.get("prev_close")
+            if isinstance(price, (int, float)) and isinstance(prev_close, (int, float)) and prev_close != 0:
+                changes.append(((price - prev_close) / prev_close) * 100)
 
     if not changes:
         return "Keine Daten verfügbar"
