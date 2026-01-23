@@ -21,3 +21,4 @@ Thumbs.db
 # Sensitive credentials
 config/cookies.json
 *.cookie
+config/portfolio.csv
