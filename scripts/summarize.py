@@ -375,7 +375,7 @@ def main():
     parser.add_argument('--style', choices=['briefing', 'analysis', 'headlines'],
                         default='briefing', help='Summary style')
     parser.add_argument('--time', choices=['morning', 'evening'],
-                        default='morning', help='Briefing type')
+                        default=None, help='Briefing type (default: auto)')
     parser.add_argument('--model', choices=['claude', 'minimax', 'gemini'],
                         default='claude', help='AI model for summarization')
     parser.add_argument('--json', action='store_true', help='Output as JSON')
