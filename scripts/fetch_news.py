@@ -368,6 +368,12 @@ def fetch_market_news(args):
 
 def get_portfolio_news(limit: int = 5, max_stocks: int = 5) -> dict:
     """Get news for portfolio stocks as data."""
+    if not (CONFIG_DIR / "portfolio.csv").exists():
+        return {
+            'fetched_at': datetime.now().isoformat(),
+            'stocks': {},
+            'error': 'Portfolio config missing: config/portfolio.csv'
+        }
     # Get symbols from portfolio
     try:
         result = subprocess.run(
@@ -405,6 +411,13 @@ def get_portfolio_news(limit: int = 5, max_stocks: int = 5) -> dict:
         }
     
     # Limit to max 5 stocks for briefings (performance)
+    if not symbols or symbols == ['']:
+        return {
+            'fetched_at': datetime.now().isoformat(),
+            'stocks': {},
+            'error': 'No portfolio symbols found'
+        }
+
     if max_stocks and len(symbols) > max_stocks:
         symbols = symbols[:max_stocks]
     

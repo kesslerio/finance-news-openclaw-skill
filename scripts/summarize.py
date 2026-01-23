@@ -252,8 +252,8 @@ def generate_briefing(args):
         max_indices_per_region=1
     )
     
-    # Get portfolio news (limit to 5 stocks max for performance)
-    portfolio_data = get_portfolio_news(2, 5)
+    # Get portfolio news (limit to 3 stocks max for performance)
+    portfolio_data = get_portfolio_news(2, 3)
     
     # Build raw content for summarization
     content_parts = []
@@ -275,9 +275,12 @@ def generate_briefing(args):
         print("⚠️ No data available for briefing", file=sys.stderr)
         return
 
-    research_result = generate_research_content(market_data, portfolio_data)
-    research_report = research_result['report']
-    source = research_result['source']
+    research_report = ''
+    source = 'none'
+    if args.research:
+        research_result = generate_research_content(market_data, portfolio_data)
+        research_report = research_result['report']
+        source = research_result['source']
 
     if research_report.strip():
         content = f"""# Research Report ({source})
@@ -357,6 +360,7 @@ def main():
     parser.add_argument('--model', choices=['claude', 'minimax', 'gemini'],
                         default='claude', help='AI model for summarization')
     parser.add_argument('--json', action='store_true', help='Output as JSON')
+    parser.add_argument('--research', action='store_true', help='Include deep research section (slower)')
 
     args = parser.parse_args()
     generate_briefing(args)
