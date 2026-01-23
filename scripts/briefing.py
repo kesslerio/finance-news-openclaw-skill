@@ -56,7 +56,7 @@ def generate_and_send(args):
     cmd = [
         'python3', SCRIPT_DIR / 'summarize.py',
         '--time', briefing_time,
-        '--style', args.style,
+        '--style', args.style, '--llm', '--model', 'gemini',
         '--lang', args.lang
     ]
 
@@ -122,7 +122,7 @@ def main():
                         help='Output language')
     parser.add_argument('--send', action='store_true',
                         help='Send to WhatsApp group')
-    parser.add_argument('--group', default='Niemand Boerse',
+    parser.add_argument('--group', default='120363421796203667@g.us',
                         help='WhatsApp group name')
     parser.add_argument('--json', action='store_true',
                         help='Output as JSON')

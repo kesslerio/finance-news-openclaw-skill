@@ -187,7 +187,12 @@ def fetch_rss(url: str, limit: int = 10, timeout: int = 15) -> list[dict]:
         return []
 
 
-def fetch_market_data(symbols: list[str], timeout: int = 30, deadline: float | None = None) -> dict:
+def fetch_market_data(
+    symbols: list[str],
+    timeout: int = 30,
+    deadline: float | None = None,
+    allow_price_fallback: bool = False,
+) -> dict:
     """Fetch market data using openbb-quote."""
     results = {}
     
@@ -219,8 +224,8 @@ def fetch_market_data(symbols: list[str], timeout: int = 30, deadline: float | N
                 elif isinstance(data, list):
                     data = data[0] if data else {}
 
-                # Fix missing prices in indices (fallback to open/prev_close)
-                if isinstance(data, dict) and data.get("price") is None:
+                # Fix missing prices for indices only when explicitly allowed.
+                if allow_price_fallback and isinstance(data, dict) and data.get("price") is None:
                     if data.get("open") is not None:
                         data["price"] = data["open"]
                     elif data.get("prev_close") is not None:
@@ -362,7 +367,12 @@ def get_market_news(
         for symbol in symbols:
             if time_left(deadline) is not None and time_left(deadline) <= 0:
                 break
-            data = fetch_market_data([symbol], timeout=subprocess_timeout, deadline=deadline)
+            data = fetch_market_data(
+                [symbol],
+                timeout=subprocess_timeout,
+                deadline=deadline,
+                allow_price_fallback=True,
+            )
             if symbol in data:
                 result['markets'][region]['indices'][symbol] = {
                     'name': config['index_names'].get(symbol, symbol),
@@ -471,7 +481,11 @@ def get_portfolio_news(
             continue
         
         articles = fetch_ticker_news(symbol, limit)
-        quotes = fetch_market_data([symbol], timeout=subprocess_timeout, deadline=deadline)
+        quotes = fetch_market_data(
+            [symbol],
+            timeout=subprocess_timeout,
+            deadline=deadline,
+        )
         
         news['stocks'][symbol] = {
             'quote': quotes.get(symbol, {}),

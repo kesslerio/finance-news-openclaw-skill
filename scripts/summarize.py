@@ -369,8 +369,8 @@ def generate_briefing(args):
     # Get market overview
     market_data = get_market_news(
         2 if fast_mode else 3,
-        regions=["us", "europe"],
-        max_indices_per_region=1,
+        regions=["us", "europe", "japan"],
+        max_indices_per_region=2,
         deadline=deadline,
         rss_timeout=rss_timeout,
         subprocess_timeout=subprocess_timeout,
@@ -445,26 +445,28 @@ def generate_briefing(args):
         if model == 'minimax':
             summary = summarize_with_minimax(content, language, args.style, deadline=deadline)
             if summary.startswith("⚠️ MiniMax briefing error"):
-                print(summary, file=sys.stderr)
-                print("⚠️ MiniMax failed; falling back to Claude...", file=sys.stderr)
                 summary = summarize_with_claude(content, language, args.style, deadline=deadline)
-                if summary.startswith("⚠️ Claude briefing error"):
-                    print(summary, file=sys.stderr)
-                    print("⚠️ Claude also failed; falling back to Gemini...", file=sys.stderr)
-                    summary = summarize_with_gemini(content, language, args.style, deadline=deadline)
         elif model == 'gemini':
             summary = summarize_with_gemini(content, language, args.style, deadline=deadline)
         else:  # claude (default)
             summary = summarize_with_claude(content, language, args.style, deadline=deadline)
             if summary.startswith("⚠️ Claude briefing error"):
-                print(summary, file=sys.stderr)
-                print("⚠️ Claude failed; falling back to Gemini summarizer", file=sys.stderr)
                 summary = summarize_with_gemini(content, language, args.style, deadline=deadline)
     
     # Format output
-    time_str = datetime.now().strftime("%H:%M")
-    date_str = datetime.now().strftime("%A, %d. %B %Y")
+    now = datetime.now()
+    time_str = now.strftime("%H:%M")
     
+    date_str = now.strftime("%A, %d. %B %Y")
+    if language == "de":
+        months = {"January": "Januar", "February": "Februar", "March": "März", "April": "April",
+                  "May": "Mai", "June": "Juni", "July": "Juli", "August": "August",
+                  "September": "September", "October": "Oktober", "November": "November", "December": "Dezember"}
+        days = {"Monday": "Montag", "Tuesday": "Dienstag", "Wednesday": "Mittwoch", "Thursday": "Donnerstag",
+                "Friday": "Freitag", "Saturday": "Samstag", "Sunday": "Sonntag"}
+        for en, de in months.items(): date_str = date_str.replace(en, de)
+        for en, de in days.items(): date_str = date_str.replace(en, de)
+
     if args.time == "morning":
         emoji = "🌅"
         title = "Morgen-Briefing"
@@ -472,7 +474,7 @@ def generate_briefing(args):
         emoji = "🌆"
         title = "Abend-Briefing"
     else:
-        hour = datetime.now().hour
+        hour = now.hour
         emoji = "🌅" if hour < 12 else "🌆"
         title = "Morgen-Briefing" if hour < 12 else "Abend-Briefing"
     

@@ -4,9 +4,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
+import json
 import pytest
 from unittest.mock import Mock, patch
-from fetch_news import fetch_rss, _get_best_feed_url
+from fetch_news import fetch_market_data, fetch_rss, _get_best_feed_url
 from utils import clamp_timeout, compute_deadline
 
 
@@ -108,3 +109,29 @@ def test_clamp_timeout_deadline_exceeded(monkeypatch):
 
     with pytest.raises(TimeoutError):
         clamp_timeout(30, deadline)
+
+
+def test_fetch_market_data_price_fallback(monkeypatch):
+    sample = {
+        "price": None,
+        "open": 100,
+        "prev_close": 105,
+        "change_percent": None,
+    }
+
+    def fake_run(*_args, **_kwargs):
+        class Result:
+            returncode = 0
+            stdout = json.dumps(sample)
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr("fetch_news.OPENBB_BINARY", "/bin/openbb-quote")
+    monkeypatch.setattr("fetch_news.subprocess.run", fake_run)
+
+    no_fallback = fetch_market_data(["^GSPC"], allow_price_fallback=False)
+    assert no_fallback["^GSPC"]["price"] is None
+
+    with_fallback = fetch_market_data(["^GSPC"], allow_price_fallback=True)
+    assert with_fallback["^GSPC"]["price"] == 100
