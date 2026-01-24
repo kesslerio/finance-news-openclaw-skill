@@ -16,6 +16,7 @@ import ssl
 import urllib.error
 import urllib.request
 import yfinance as yf
+import pandas as pd
 
 from utils import clamp_timeout, compute_deadline, ensure_venv, time_left
 
@@ -580,6 +581,20 @@ def fetch_market_news(args):
             print(f"• [{article['source']}] {article['title']}")
 
 
+def get_portfolio_metadata() -> dict:
+    """Get metadata for portfolio symbols."""
+    path = CONFIG_DIR / "portfolio.csv"
+    meta = {}
+    if path.exists():
+        import csv
+        with open(path, 'r') as f:
+            for row in csv.DictReader(f):
+                sym = row.get('symbol', '').strip().upper()
+                if sym:
+                    meta[sym] = row
+    return meta
+
+
 def get_portfolio_news(
     limit: int = 5,
     max_stocks: int = 5,
@@ -594,16 +609,19 @@ def get_portfolio_news(
     symbols = get_portfolio_symbols()
     if not symbols:
         raise PortfolioError("No portfolio symbols found")
+    
+    # Get metadata
+    portfolio_meta = get_portfolio_metadata()
 
     # If large portfolio (e.g. > 15 stocks), switch to tiered fetching
-    # Issue #36: "Support large portfolios (100-200+ stocks)"
     if len(symbols) > 15:
         print(f"⚡ Large portfolio detected ({len(symbols)} stocks); using tiered fetch.", file=sys.stderr)
         return get_large_portfolio_news(
             limit=limit,
-            top_movers_count=10, # Top 5 + Bottom 5
+            top_movers_count=10, 
             deadline=deadline,
-            subprocess_timeout=subprocess_timeout
+            subprocess_timeout=subprocess_timeout,
+            portfolio_meta=portfolio_meta
         )
 
     # Standard fetching for small portfolios
@@ -632,7 +650,8 @@ def get_portfolio_news(
         
         news['stocks'][symbol] = {
             'quote': quotes.get(symbol, {}),
-            'articles': articles
+            'articles': articles,
+            'info': portfolio_meta.get(symbol, {})
         }
 
     return news
@@ -866,6 +885,7 @@ def get_large_portfolio_news(
     top_movers_count: int = 10,
     deadline: float | None = None,
     subprocess_timeout: int = 30,
+    portfolio_meta: dict | None = None,
 ) -> dict:
     """
     Tiered fetch for large portfolios.
@@ -931,7 +951,8 @@ def get_large_portfolio_news(
         
         news['stocks'][symbol] = {
             'quote': quote_data,
-            'articles': articles
+            'articles': articles,
+            'info': portfolio_meta.get(symbol, {}) if portfolio_meta else {}
         }
         
     return news

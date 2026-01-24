@@ -24,11 +24,11 @@ def load_portfolio() -> list[dict]:
 def save_portfolio(portfolio: list[dict]):
     """Save portfolio to CSV."""
     if not portfolio:
-        PORTFOLIO_FILE.write_text("symbol,name,category,notes\n")
+        PORTFOLIO_FILE.write_text("symbol,name,category,notes,type\n")
         return
     
     with open(PORTFOLIO_FILE, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=['symbol', 'name', 'category', 'notes'])
+        writer = csv.DictWriter(f, fieldnames=['symbol', 'name', 'category', 'notes', 'type'])
         writer.writeheader()
         writer.writerows(portfolio)
 
@@ -43,20 +43,29 @@ def list_portfolio(args):
     
     print(f"\n📊 Portfolio ({len(portfolio)} stocks)\n")
     
-    # Group by category
-    categories = {}
+    # Group by Type then Category
+    by_type = {}
     for stock in portfolio:
-        cat = stock.get('category', 'Other') or 'Other'
-        if cat not in categories:
-            categories[cat] = []
-        categories[cat].append(stock)
-    
-    for cat, stocks in categories.items():
-        print(f"### {cat}")
-        for s in stocks:
-            notes = f" — {s['notes']}" if s.get('notes') else ""
-            print(f"  • {s['symbol']}: {s['name']}{notes}")
-        print()
+        t = stock.get('type', 'Watchlist') or 'Watchlist'
+        if t not in by_type:
+            by_type[t] = []
+        by_type[t].append(stock)
+        
+    for t, type_stocks in by_type.items():
+        print(f"# {t}")
+        categories = {}
+        for stock in type_stocks:
+            cat = stock.get('category', 'Other') or 'Other'
+            if cat not in categories:
+                categories[cat] = []
+            categories[cat].append(stock)
+        
+        for cat, stocks in categories.items():
+            print(f"### {cat}")
+            for s in stocks:
+                notes = f" — {s['notes']}" if s.get('notes') else ""
+                print(f"  • {s['symbol']}: {s['name']}{notes}")
+            print()
 
 
 def add_stock(args):
@@ -72,12 +81,13 @@ def add_stock(args):
         'symbol': args.symbol.upper(),
         'name': args.name or args.symbol.upper(),
         'category': args.category or '',
-        'notes': args.notes or ''
+        'notes': args.notes or '',
+        'type': args.type
     }
     
     portfolio.append(new_stock)
     save_portfolio(portfolio)
-    print(f"✅ Added {args.symbol.upper()} to portfolio")
+    print(f"✅ Added {args.symbol.upper()} to portfolio ({args.type})")
 
 
 def remove_stock(args):
@@ -114,7 +124,8 @@ def import_csv(args):
             'symbol': row.get('symbol', row.get('Symbol', row.get('ticker', ''))).upper(),
             'name': row.get('name', row.get('Name', row.get('company', ''))),
             'category': row.get('category', row.get('Category', row.get('sector', ''))),
-            'notes': row.get('notes', row.get('Notes', ''))
+            'notes': row.get('notes', row.get('Notes', '')),
+            'type': row.get('type', 'Watchlist')
         })
     
     save_portfolio(normalized)
@@ -150,7 +161,8 @@ def create_interactive(args):
             'symbol': symbol,
             'name': name,
             'category': category,
-            'notes': ''
+            'notes': '',
+            'type': 'Watchlist'
         })
         print(f"  Added: {symbol}")
     
@@ -187,6 +199,7 @@ def main():
     add_parser.add_argument('--name', help='Company name')
     add_parser.add_argument('--category', help='Category (e.g., Tech, Finance)')
     add_parser.add_argument('--notes', help='Notes')
+    add_parser.add_argument('--type', choices=['Holding', 'Watchlist'], default='Watchlist', help='Portfolio type')
     add_parser.set_defaults(func=add_stock)
     
     # Remove command

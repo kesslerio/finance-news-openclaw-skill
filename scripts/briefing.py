@@ -78,9 +78,6 @@ def generate_and_send(args):
     if args.debug:
         cmd.append('--debug')
     
-    if args.debug:
-        cmd.append('--debug')
-    
     # Always use JSON for internal processing to handle splits
     cmd.append('--json')
     

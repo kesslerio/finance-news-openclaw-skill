@@ -14,6 +14,15 @@ done
 SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 BASE_DIR="$( cd -P "${SCRIPT_DIR}/.." && pwd )"
 
+# NixOS Fix: Ensure libstdc++.so.6 is in LD_LIBRARY_PATH for numpy/yfinance
+if [[ -d "/nix/store" ]]; then
+  # Try to find libstdc++.so.6 in the store
+  LIBPATH=$(find /nix/store -maxdepth 2 -name "*-gcc-*-lib" -print -quit 2>/dev/null)/lib
+  if [[ -d "$LIBPATH" ]]; then
+    export LD_LIBRARY_PATH="$LIBPATH:$LD_LIBRARY_PATH"
+  fi
+fi
+
 # Auto-activate local venv if present (prevents missing deps in cron/gateway runs)
 VENV_DIR="${BASE_DIR}/venv"
 if [[ -z "${VIRTUAL_ENV:-}" && -x "${VENV_DIR}/bin/python3" ]]; then
@@ -28,7 +37,7 @@ fi
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 usage() {
-    cat << EOF
+    cat << EOM
 📈 Finance News CLI
 
 Usage: finance-news <command> [options]
@@ -61,7 +70,7 @@ Examples:
   finance-news market --lang en
   finance-news news AAPL
   finance-news portfolio-add NVDA --name "NVIDIA Corporation" --category Tech
-EOF
+EOM
 }
 
 case "${1:-}" in
