@@ -14,6 +14,8 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 
+import urllib.parse
+import urllib.request
 from utils import clamp_timeout, compute_deadline, ensure_venv, time_left
 
 ensure_venv()
@@ -57,6 +59,27 @@ LANG_PROMPTS = {
     "en": "Output must be in English only."
 }
 
+
+def shorten_url(url: str) -> str:
+    """Shorten URL using is.gd service."""
+    if not url or len(url) < 30:  # Don't shorten short URLs
+        return url
+        
+    try:
+        api_url = "https://is.gd/create.php"
+        data = urllib.parse.urlencode({'format': 'simple', 'url': url}).encode()
+        req = urllib.request.Request(api_url, data=data)
+        
+        # Set a short timeout - if it's slow, just use original
+        with urllib.request.urlopen(req, timeout=2) as response:
+            short_url = response.read().decode('utf-8').strip()
+            if short_url.startswith('http'):
+                return short_url
+    except Exception:
+        pass  # Fail silently, return original
+    return url
+
+
 STYLE_PROMPTS = {
     "briefing": """You are a financial analyst. Create a concise market briefing.
 
@@ -69,7 +92,7 @@ IMPORTANT:
 Structure (use these exact headings):
 1) **Sentiment:** (bullish/bearish/neutral) with a short rationale from the data
 2) **Top 3 Headlines:** numbered list (we will insert the exact list; do not invent)
-3) **Portfolio Impact:** only if portfolio data exists
+3) **Portfolio Impact:** Split into **Holdings** and **Watchlist** sections if applicable. Prioritize Holdings.
 4) **Recommendation:** short action recommendation
 
 Max 200 words. Use emojis sparingly.""",
@@ -580,8 +603,13 @@ def format_sources(headlines: list, labels: dict) -> str:
             extra_links = article.get("links")
             if isinstance(extra_links, (list, set, tuple)):
                 links.extend([str(item).strip() for item in extra_links if str(item).strip()])
-        for link in sorted(set(links)):
-            lines.append(f"[{idx}] {link}")
+        
+        # Use first unique link and shorten it
+        unique_links = sorted(set(links))
+        if unique_links:
+            short_link = shorten_url(unique_links[0])
+            lines.append(f"[{idx}] {short_link}")
+            
     return "\n".join(lines)
 
 
@@ -589,16 +617,42 @@ def format_portfolio_news(portfolio_data: dict) -> str:
     """Format portfolio news for the prompt."""
     lines = ["## Portfolio News\n"]
     
-    for symbol, data in portfolio_data.get('stocks', {}).items():
+    # Group by type
+    by_type = {'Holding': [], 'Watchlist': []}
+    
+    stocks = portfolio_data.get('stocks', {})
+    if not stocks:
+        return ""
+
+    for symbol, data in stocks.items():
+        info = data.get('info', {})
+        # info might be None if fetch_news didn't inject it properly or old version
+        if not info: info = {}
+        
+        t = info.get('type', 'Watchlist')
+        # Normalize
+        if 'Hold' in t: t = 'Holding'
+        else: t = 'Watchlist'
+        
         quote = data.get('quote', {})
         price = quote.get('price', 'N/A')
         change_pct = quote.get('change_percent', 0)
         
-        lines.append(f"### {symbol} (${price}, {change_pct:+.2f}%)")
-        
+        # Format string
+        entry = [f"#### {symbol} (${price}, {change_pct:+.2f}%)"]
         for article in data.get('articles', [])[:3]:
-            lines.append(f"- {article.get('title', '')}")
-        lines.append("")
+            entry.append(f"- {article.get('title', '')}")
+        entry.append("")
+        
+        by_type[t].append('\n'.join(entry))
+        
+    if by_type['Holding']:
+        lines.append("### Holdings (Priority)\n")
+        lines.extend(by_type['Holding'])
+        
+    if by_type['Watchlist']:
+        lines.append("### Watchlist\n")
+        lines.extend(by_type['Watchlist'])
     
     return '\n'.join(lines)
 
