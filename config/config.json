@@ -56,8 +56,10 @@
     "cnbc": {
       "name": "CNBC",
       "enabled": true,
-      "top": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-      "markets": "https://www.cnbc.com/id/20910258/device/rss/rss.html",
+      "top": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10001147",
+      "business": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839069",
+      "markets": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258",
+      "world": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
       "tech": "https://www.cnbc.com/id/19854910/device/rss/rss.html"
     },
     "yahoo": {

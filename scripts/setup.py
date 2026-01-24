@@ -12,7 +12,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_DIR = SCRIPT_DIR.parent / "config"
-SOURCES_FILE = CONFIG_DIR / "sources.json"
+SOURCES_FILE = CONFIG_DIR / "config.json"
 
 
 def load_sources():
@@ -33,99 +33,11 @@ def save_sources(sources: dict):
 
 def get_default_sources():
     """Return default source configuration."""
-    return {
-        "rss_feeds": {
-            "wsj": {
-                "name": "Wall Street Journal",
-                "enabled": True,
-                "markets": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
-                "business": "https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml",
-                "world": "https://feeds.a.dj.com/rss/RSSWorldNews.xml"
-            },
-            "barrons": {
-                "name": "Barron's",
-                "enabled": True,
-                "main": "https://www.barrons.com/market-data/rss/articles"
-            },
-            "cnbc": {
-                "name": "CNBC",
-                "enabled": True,
-                "top": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-                "markets": "https://www.cnbc.com/id/20910258/device/rss/rss.html",
-                "tech": "https://www.cnbc.com/id/19854910/device/rss/rss.html"
-            },
-            "yahoo": {
-                "name": "Yahoo Finance",
-                "enabled": True,
-                "top": "https://finance.yahoo.com/news/rssindex"
-            },
-            "reuters": {
-                "name": "Reuters",
-                "enabled": False,
-                "business": "https://www.reutersagency.com/feed/?best-topics=business-finance&post_type=best"
-            },
-            "ft": {
-                "name": "Financial Times",
-                "enabled": False,
-                "world": "https://www.ft.com/world?format=rss",
-                "note": "May require subscription for full content"
-            }
-        },
-        "markets": {
-            "us": {
-                "name": "US Markets",
-                "enabled": True,
-                "indices": ["^GSPC", "^DJI", "^IXIC"],
-                "index_names": {"^GSPC": "S&P 500", "^DJI": "Dow Jones", "^IXIC": "NASDAQ"}
-            },
-            "europe": {
-                "name": "Europe",
-                "enabled": True,
-                "indices": ["^GDAXI", "^STOXX50E", "^FTSE"],
-                "index_names": {"^GDAXI": "DAX", "^STOXX50E": "STOXX 50", "^FTSE": "FTSE 100"}
-            },
-            "japan": {
-                "name": "Japan",
-                "enabled": True,
-                "indices": ["^N225"],
-                "index_names": {"^N225": "Nikkei 225"}
-            },
-            "asia": {
-                "name": "Asia Pacific",
-                "enabled": False,
-                "indices": ["^HSI", "000001.SS"],
-                "index_names": {"^HSI": "Hang Seng", "000001.SS": "Shanghai Composite"}
-            }
-        },
-        "delivery": {
-            "whatsapp": {
-                "enabled": True,
-                "group": "Niemand Boerse"
-            },
-            "telegram": {
-                "enabled": False,
-                "group": ""
-            }
-        },
-        "language": {
-            "default": "de",
-            "supported": ["de", "en"]
-        },
-        "schedule": {
-            "morning": {
-                "enabled": True,
-                "cron": "30 6 * * 1-5",
-                "timezone": "America/Los_Angeles",
-                "description": "US Market Open (9:30 AM ET = 6:30 AM PT)"
-            },
-            "evening": {
-                "enabled": True,
-                "cron": "0 13 * * 1-5",
-                "timezone": "America/Los_Angeles",
-                "description": "US Market Close (4:00 PM ET = 1:00 PM PT)"
-            }
-        }
-    }
+    config_path = CONFIG_DIR / "config.json"
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    return {}
 
 
 def prompt(message: str, default: str = "") -> str:
