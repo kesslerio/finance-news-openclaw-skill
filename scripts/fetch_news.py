@@ -15,6 +15,7 @@ from pathlib import Path
 import ssl
 import urllib.error
 import urllib.request
+import yfinance as yf
 
 from utils import clamp_timeout, compute_deadline, ensure_venv, time_left
 
@@ -221,64 +222,170 @@ def fetch_market_data(
     deadline: float | None = None,
     allow_price_fallback: bool = False,
 ) -> dict:
-    """Fetch market data using openbb-quote."""
+    """Fetch market data using yfinance batching (primary) with openbb fallback."""
     results = {}
-    
-    # Check if openbb-quote is available
-    if OPENBB_BINARY is None:
-        print("❌ openbb-quote not available - skipping market data fetch", file=sys.stderr)
+    if not symbols:
         return results
-    
-    for symbol in symbols:
-        try:
+
+    # 1. Try yfinance batch fetch (fast)
+    try:
+        # Check deadline
+        if time_left(deadline) is not None and time_left(deadline) <= 0:
+             return results
+        
+        # Download batch
+        # timeout param in yf is for connection, usually fast
+        tickers = " ".join(symbols)
+        # period='5d' to ensure we get previous close if today is holiday/weekend
+        # actions=False to speed up
+        # threads=True for parallel
+        df = yf.download(tickers, period="5d", progress=False, threads=True, ignore_tz=True)
+        
+        # Parse results
+        # yfinance returns multi-index columns if len(symbols) > 1
+        # If single symbol, it might be flat. 
+        # Check structure.
+        
+        is_multi = len(symbols) > 1
+        
+        # Extract latest data for each symbol
+        for symbol in symbols:
             try:
-                effective_timeout = clamp_timeout(timeout, deadline)
-            except TimeoutError:
-                return results
-            result = subprocess.run(
-                [OPENBB_BINARY, symbol],
-                capture_output=True,
-                text=True,
-                stdin=subprocess.DEVNULL,
-                timeout=effective_timeout,
-                check=False
-            )
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
+                # Get symbol data slice
+                if is_multi:
+                    try:
+                        # yfinance > 0.2.0 uses MultiIndex (Price, Ticker)
+                        # We need to extract the cross-section or just check columns
+                        # Accessing via xs or directly if columns are (Price, Ticker)
+                        # simpler: just use Ticker object if download fails, but download is faster.
+                        # Let's handle the dataframe
+                        if isinstance(df.columns, pd.MultiIndex):
+                             # This handles the case where columns are (Price, Ticker)
+                             # We want the 'Close' for this symbol
+                             # But let's check recent valid index
+                             pass
+                    except Exception:
+                        pass
+                
+                # Simplified approach: Use Tickers object for reliability if download structure is complex
+                # But download is the only way to batch efficiently.
+                
+                # Let's iterate the symbols and extracting from the df
+                # DF index is Date.
+                
+                if df.empty:
+                    continue
 
-                # Normalize provider output
-                if isinstance(data, dict) and "results" in data and isinstance(data["results"], list):
-                    data = data["results"][0] if data["results"] else {}
-                elif isinstance(data, list):
-                    data = data[0] if data else {}
+                # Get latest row with valid data (Open/Close)
+                # We need 'Close' and 'Prev Close'
+                
+                # Handle single vs multi-symbol DF structure difference
+                if len(symbols) == 1:
+                     s_df = df
+                else:
+                     # Access cross-section safely
+                     try:
+                         # yfinance 0.2+ returns columns like ('Close', 'AAPL')
+                         # We can assume it's multi-index if len > 1 usually
+                         # But let's use the xs method if available or direct column access
+                         s_df = df.xs(symbol, level=1, axis=1, drop_level=True)
+                     except (KeyError, AttributeError):
+                         # Maybe it wasn't multi-index (only 1 symbol succeeded?)
+                         # Fallback to Ticker
+                         continue
 
-                # Fix missing prices for indices only when explicitly allowed.
-                if allow_price_fallback and isinstance(data, dict) and data.get("price") is None:
-                    if data.get("open") is not None:
-                        data["price"] = data["open"]
-                    elif data.get("prev_close") is not None:
-                        data["price"] = data["prev_close"]
+                # Get last valid price
+                if s_df.empty:
+                    continue
+                    
+                # Clean NaNs
+                s_df = s_df.dropna(subset=['Close'])
+                if s_df.empty:
+                    continue
 
-                # Calculate change_percent
-                if (
-                    isinstance(data, dict)
-                    and data.get("change_percent") is None
-                    and data.get("price")
-                    and data.get("prev_close")
-                ):
-                    price = data["price"]
-                    prev_close = data["prev_close"]
-                    if prev_close != 0:
-                        data["change_percent"] = ((price - prev_close) / prev_close) * 100
+                latest = s_df.iloc[-1]
+                price = float(latest['Close'])
+                
+                # Calculate change
+                prev_close = 0.0
+                change_percent = 0.0
+                
+                if len(s_df) > 1:
+                    prev_row = s_df.iloc[-2]
+                    prev_close = float(prev_row['Close'])
+                    if prev_close > 0:
+                        change_percent = ((price - prev_close) / prev_close) * 100
+                
+                results[symbol] = {
+                    "price": price,
+                    "change_percent": change_percent,
+                    "prev_close": prev_close,
+                    "symbol": symbol
+                }
 
-                results[symbol] = data
-        except subprocess.TimeoutExpired:
-            print(f"⚠️ Timeout fetching {symbol}", file=sys.stderr)
-        except json.JSONDecodeError as e:
-            print(f"⚠️ Invalid JSON from openbb-quote for {symbol}: {e}", file=sys.stderr)
-        except Exception as e:
-            print(f"⚠️ Error fetching {symbol}: {e}", file=sys.stderr)
+            except Exception as e:
+                # print(f"DEBUG: yf parse error for {symbol}: {e}", file=sys.stderr)
+                continue
+                
+    except Exception as e:
+        print(f"⚠️ yfinance batch failed: {e}", file=sys.stderr)
     
+    # 2. Fallback for missing symbols using openbb (slow)
+    missing = [s for s in symbols if s not in results]
+    if missing and OPENBB_BINARY:
+        # print(f"⚠️ Falling back to openbb for: {missing}", file=sys.stderr)
+        for symbol in missing:
+             # ... existing openbb logic ...
+             # We can copy the existing logic here or recursively call a helper
+             # For now, let's keep it simple and just use the existing loop logic logic from original function
+             pass
+             
+    # Since I'm replacing the whole function, I need to include the openbb fallback logic explicitly
+    if missing and OPENBB_BINARY:
+        for symbol in missing:
+            try:
+                try:
+                    effective_timeout = clamp_timeout(timeout, deadline)
+                except TimeoutError:
+                    break
+                    
+                result = subprocess.run(
+                    [OPENBB_BINARY, symbol],
+                    capture_output=True,
+                    text=True,
+                    stdin=subprocess.DEVNULL,
+                    timeout=effective_timeout,
+                    check=False
+                )
+                if result.returncode == 0:
+                    data = json.loads(result.stdout)
+                    # Normalize (same as original)
+                    if isinstance(data, dict) and "results" in data and isinstance(data["results"], list):
+                        data = data["results"][0] if data["results"] else {}
+                    elif isinstance(data, list):
+                        data = data[0] if data else {}
+                    
+                    if allow_price_fallback and isinstance(data, dict) and data.get("price") is None:
+                        if data.get("open") is not None:
+                            data["price"] = data["open"]
+                        elif data.get("prev_close") is not None:
+                            data["price"] = data["prev_close"]
+
+                    if (
+                        isinstance(data, dict)
+                        and data.get("change_percent") is None
+                        and data.get("price")
+                        and data.get("prev_close")
+                    ):
+                        price = data["price"]
+                        prev_close = data["prev_close"]
+                        if prev_close != 0:
+                            data["change_percent"] = ((price - prev_close) / prev_close) * 100
+                            
+                    results[symbol] = data
+            except Exception:
+                continue
+
     return results
 
 
@@ -482,46 +589,32 @@ def get_portfolio_news(
     """Get news for portfolio stocks as data."""
     if not (CONFIG_DIR / "portfolio.csv").exists():
         raise PortfolioError("Portfolio config missing: config/portfolio.csv")
+    
     # Get symbols from portfolio
-    try:
-        effective_timeout = clamp_timeout(10, deadline)
-        result = subprocess.run(
-            ['python3', str(SCRIPT_DIR / 'portfolio.py'), 'symbols'],
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            timeout=effective_timeout,
-            check=False
-        )
-        
-        if result.returncode != 0:
-            print(f"❌ Failed to load portfolio: {result.stderr}", file=sys.stderr)
-            raise PortfolioError(f"Portfolio load failed: {result.stderr}")
-        
-        symbols = [s.strip() for s in result.stdout.strip().split(',') if s.strip()]
-        if not symbols:
-            raise PortfolioError("No portfolio symbols found")
-    
-    except subprocess.TimeoutExpired:
-        print("❌ Portfolio fetch timeout", file=sys.stderr)
-        raise PortfolioError("Portfolio fetch timeout")
-    except TimeoutError:
-        raise PortfolioError("Deadline exceeded while fetching portfolio symbols")
-    except PortfolioError:
-        raise
-    except Exception as e:
-        print(f"❌ Portfolio error: {e}", file=sys.stderr)
-        raise PortfolioError(str(e))
-    
-    # Limit stocks for performance
+    symbols = get_portfolio_symbols()
+    if not symbols:
+        raise PortfolioError("No portfolio symbols found")
 
-    if max_stocks and len(symbols) > max_stocks:
-        symbols = symbols[:max_stocks]
-    
+    # If large portfolio (e.g. > 15 stocks), switch to tiered fetching
+    # Issue #36: "Support large portfolios (100-200+ stocks)"
+    if len(symbols) > 15:
+        print(f"⚡ Large portfolio detected ({len(symbols)} stocks); using tiered fetch.", file=sys.stderr)
+        return get_large_portfolio_news(
+            limit=limit,
+            top_movers_count=10, # Top 5 + Bottom 5
+            deadline=deadline,
+            subprocess_timeout=subprocess_timeout
+        )
+
+    # Standard fetching for small portfolios
     news = {
         'fetched_at': datetime.now().isoformat(),
         'stocks': {}
     }
+    
+    # Limit stocks for performance if manual limit set (legacy logic)
+    if max_stocks and len(symbols) > max_stocks:
+        symbols = symbols[:max_stocks]
     
     for symbol in symbols:
         if time_left(deadline) is not None and time_left(deadline) <= 0:
@@ -766,6 +859,119 @@ def web_search_news(symbol: str, limit: int = 5) -> list[dict]:
     except Exception as e:
         print(f"⚠️ Web search failed for {symbol}: {e}", file=sys.stderr)
     return articles
+
+
+def get_large_portfolio_news(
+    limit: int = 3,
+    top_movers_count: int = 10,
+    deadline: float | None = None,
+    subprocess_timeout: int = 30,
+) -> dict:
+    """
+    Tiered fetch for large portfolios.
+    1. Batch fetch prices for ALL stocks (fast).
+    2. Identify top movers (gainers/losers).
+    3. Fetch news ONLY for top movers.
+    """
+    symbols = get_portfolio_symbols()
+    if not symbols:
+        raise PortfolioError("No portfolio symbols found")
+
+    # 1. Batch fetch prices
+    try:
+        effective_timeout = clamp_timeout(subprocess_timeout, deadline)
+    except TimeoutError:
+         raise PortfolioError("Deadline exceeded before price fetch")
+
+    # This uses the new yfinance batching
+    quotes = fetch_market_data(symbols, timeout=effective_timeout, deadline=deadline)
+    
+    # 2. Identify top movers
+    movers = []
+    for symbol, data in quotes.items():
+        change = data.get('change_percent', 0)
+        movers.append((symbol, change, data))
+    
+    # Sort: Absolute change descending? Or Gainers vs Losers?
+    # Issue says: "Biggest gainers (top 5), Biggest losers (top 5)"
+    
+    movers.sort(key=lambda x: x[1]) # Sort by change ascending
+    
+    losers = movers[:5] # Bottom 5
+    gainers = movers[-5:] # Top 5
+    gainers.reverse() # Descending
+    
+    # Combined list for news fetching
+    # Ensure uniqueness if < 10 stocks total
+    top_symbols = []
+    seen = set()
+    
+    for m in gainers + losers:
+        sym = m[0]
+        if sym not in seen:
+            top_symbols.append(sym)
+            seen.add(sym)
+            
+    # 3. Fetch news for top movers
+    news = {
+        'fetched_at': datetime.now().isoformat(),
+        'stocks': {},
+        'meta': {
+            'total_stocks': len(symbols),
+            'top_movers_count': len(top_symbols)
+        }
+    }
+    
+    for symbol in top_symbols:
+        if time_left(deadline) is not None and time_left(deadline) <= 0:
+            break
+            
+        articles = fetch_ticker_news(symbol, limit)
+        quote_data = quotes.get(symbol, {})
+        
+        news['stocks'][symbol] = {
+            'quote': quote_data,
+            'articles': articles
+        }
+        
+    return news
+
+    """Fetch portfolio-only news (top 5 gainers + top 5 losers with news)."""
+    result = get_portfolio_only_news(limit_per_ticker=args.limit)
+    
+    if "error" in result:
+        print(f"\n❌ Error: {result.get('error', 'Unknown')}", file=sys.stderr)
+        sys.exit(1)
+    
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+    # Text output
+    def format_ticker(ticker: dict):
+        symbol = ticker['symbol']
+        price = ticker.get('price')
+        change = ticker['change_pct']
+        emoji = '📈' if change >= 0 else '📉'
+        price_str = f"${price:.2f}" if price else 'N/A'
+        lines = [f"**{symbol}** {emoji} {price_str} ({change:+.2f}%)"]
+        if ticker.get('news'):
+            for article in ticker['news'][:args.limit]:
+                source = article.get('source', 'Unknown')
+                title = article.get('title', '')[:70]
+                lines.append(f"  • [{source}] {title}...")
+        else:
+            lines.append("  • No recent news")
+        return '\n'.join(lines)
+    
+    print("\n🚀 **Top Gainers**\n")
+    for ticker in result['gainers']:
+        print(format_ticker(ticker))
+        print()
+    
+    print("\n📉 **Top Losers**\n")
+    for ticker in result['losers']:
+        print(format_ticker(ticker))
+        print()
 
 
 def fetch_portfolio_only(args):

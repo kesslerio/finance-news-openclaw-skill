@@ -958,16 +958,59 @@ def generate_briefing(args):
     prefix = labels.get("title_prefix", "Market")
     time_suffix = labels.get("time_suffix", "")
     
-    output = f"""{emoji} **{prefix} {title}**
+    # Message 1: Macro
+    macro_output = f"""{emoji} **{prefix} {title}**
 {date_str} | {time_str} {time_suffix}
 
 {summary}
 """
-
     sources_section = format_sources(top_headlines, labels)
     if sources_section:
-        output = f"{output}\n{sources_section}\n"
-    
+        macro_output = f"{macro_output}\n{sources_section}\n"
+
+    # Message 2: Portfolio (if available)
+    portfolio_output = ""
+    if portfolio_data:
+        p_meta = portfolio_data.get('meta', {})
+        total_stocks = p_meta.get('total_stocks')
+        
+        # Determine if we should split (Large portfolio or explicitly requested)
+        is_large = total_stocks and total_stocks > 15
+        
+        if is_large:
+            # Format top movers for Message 2
+            lines = [f"📊 **Portfolio Movers** (Top {len(portfolio_data['stocks'])} of {total_stocks})"]
+            
+            # Sort stocks by magnitude of move for display
+            stocks = []
+            for sym, data in portfolio_data['stocks'].items():
+                quote = data.get('quote', {})
+                change = quote.get('change_percent', 0)
+                price = quote.get('price')
+                stocks.append({'symbol': sym, 'change': change, 'price': price, 'articles': data.get('articles', [])})
+            
+            # Sort: Gainers first, then Losers? Or just absolute magnitude?
+            # Issue says: Top 10 movers (5 gainers, 5 losers)
+            # We assume fetch_news passed us the right stocks. We just display them.
+            # Let's sort by change desc
+            stocks.sort(key=lambda x: x['change'], reverse=True)
+            
+            for s in stocks:
+                emoji_p = '📈' if s['change'] >= 0 else '📉'
+                price_str = f"${s['price']:.2f}" if s['price'] else 'N/A'
+                lines.append(f"\n**{s['symbol']}** {emoji_p} {price_str} ({s['change']:+.2f}%)")
+                for art in s['articles'][:2]: # Limit to 2 articles per stock in briefing
+                    lines.append(f"• {art['title']}")
+            
+            portfolio_output = "\n".join(lines)
+            
+            # If not JSON output, we might want to print a delimiter
+            if not args.json:
+                # For stdout, we just print them separated by newline if not handled by briefing.py splitting
+                # But briefing.py needs to know to split.
+                # We'll use a delimiter that briefing.py can look for.
+                pass
+        
     write_debug_once()
 
     if args.json:
@@ -977,6 +1020,8 @@ def generate_briefing(args):
             'time': time_str,
             'language': language,
             'summary': summary,
+            'macro_message': macro_output,
+            'portfolio_message': portfolio_output, # New field
             'sources': [
                 {'index': idx + 1, 'url': item.get('link', ''), 'source': item.get('source', ''), 'links': sorted(list(item.get('links', [])))}
                 for idx, item in enumerate(top_headlines)
@@ -987,7 +1032,10 @@ def generate_briefing(args):
             }
         }, indent=2, ensure_ascii=False))
     else:
-        print(output)
+        print(macro_output)
+        if portfolio_output:
+            print("\n" + "="*20 + " SPLIT " + "="*20 + "\n")
+            print(portfolio_output)
 
 
 def main():

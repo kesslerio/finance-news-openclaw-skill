@@ -78,9 +78,11 @@ def generate_and_send(args):
     if args.debug:
         cmd.append('--debug')
     
-    # Pass --json flag if requested
-    if args.json:
-        cmd.append('--json')
+    if args.debug:
+        cmd.append('--debug')
+    
+    # Always use JSON for internal processing to handle splits
+    cmd.append('--json')
     
     print(f"📊 Generating {briefing_time} briefing...", file=sys.stderr)
     
@@ -100,28 +102,38 @@ def generate_and_send(args):
         print(f"❌ Briefing generation failed: {result.stderr}", file=sys.stderr)
         sys.exit(1)
     
-    briefing = result.stdout.strip()
-    
-    # Print to stdout
-    print(briefing)
+    try:
+        data = json.loads(result.stdout.strip())
+    except json.JSONDecodeError:
+        # Fallback if not JSON (shouldn't happen with --json)
+        print(f"⚠️ Failed to parse briefing JSON", file=sys.stderr)
+        print(result.stdout)
+        return result.stdout
+
+    # Output handling
+    if args.json:
+        print(json.dumps(data, indent=2))
+    else:
+        # Print for humans
+        if data.get('macro_message'):
+             print(data['macro_message'])
+        if data.get('portfolio_message'):
+             print("\n" + "="*20 + "\n")
+             print(data['portfolio_message'])
     
     # Send to WhatsApp if requested
     if args.send and args.group:
-        if args.json:
-            # Parse JSON and send summary only
-            try:
-                data = json.loads(briefing)
-                message = data.get('summary', '')
-                if message:
-                    send_to_whatsapp(message, args.group)
-                else:
-                    print(f"⚠️ No summary field in JSON output", file=sys.stderr)
-            except json.JSONDecodeError:
-                print(f"⚠️ Cannot parse JSON for WhatsApp send", file=sys.stderr)
-        else:
-            send_to_whatsapp(briefing, args.group)
-    
-    return briefing
+        # Message 1: Macro
+        macro_msg = data.get('macro_message') or data.get('summary', '')
+        if macro_msg:
+            send_to_whatsapp(macro_msg, args.group)
+        
+        # Message 2: Portfolio (if exists)
+        portfolio_msg = data.get('portfolio_message')
+        if portfolio_msg:
+            send_to_whatsapp(portfolio_msg, args.group)
+            
+    return data.get('macro_message', '')
 
 
 def main():
