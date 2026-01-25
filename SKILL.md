@@ -124,6 +124,16 @@ finance-news news AAPL
 finance-news news TSLA
 ```
 
+### Equity Analysis (Quality Compounder Score)
+
+Use the QCS tool to evaluate potential "Quality Compounders" (high ROIC, stable margins) that might be undervalued by SaaS-heavy metrics. **ALWAYS run this before recommending a stock** to verify quality.
+
+```bash
+# Analyze stock quality
+finance-news score NVO
+finance-news score MC.PA
+```
+
 ## Configuration
 
 ### Portfolio CSV Format
