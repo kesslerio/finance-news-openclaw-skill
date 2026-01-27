@@ -16,18 +16,28 @@ BASE_DIR="$( cd -P "${SCRIPT_DIR}/.." && pwd )"
 
 # NixOS Fix: Ensure libstdc++.so.6 is in LD_LIBRARY_PATH for numpy/yfinance
 # NixOS/Linuxbrew Fix: Ensure libstdc++.so.6 is available for numpy/yfinance
+# Note: Avoid trailing colon in LD_LIBRARY_PATH (security: empty entry = cwd)
+prepend_ld_path() {
+  local new_path="$1"
+  if [[ -z "${LD_LIBRARY_PATH:-}" ]]; then
+    export LD_LIBRARY_PATH="$new_path"
+  else
+    export LD_LIBRARY_PATH="$new_path:$LD_LIBRARY_PATH"
+  fi
+}
+
 if [[ -d "/nix/store" ]]; then
   # Priority 1: Linuxbrew (most reliable)
   if [[ -d "/home/linuxbrew/.linuxbrew/lib" ]]; then
-    export LD_LIBRARY_PATH="/home/linuxbrew/.linuxbrew/lib:${LD_LIBRARY_PATH:-}"
+    prepend_ld_path "/home/linuxbrew/.linuxbrew/lib"
   # Priority 2: User Linuxbrew
   elif [[ -d "$HOME/.linuxbrew/lib" ]]; then
-    export LD_LIBRARY_PATH="$HOME/.linuxbrew/lib:${LD_LIBRARY_PATH:-}"
+    prepend_ld_path "$HOME/.linuxbrew/lib"
   # Priority 3: Nix store (slow fallback)
   else
     LIBPATH=$(find /nix/store -maxdepth 2 -name "*-gcc-*-lib" -print -quit 2>/dev/null)/lib
     if [[ -d "$LIBPATH" ]]; then
-      export LD_LIBRARY_PATH="$LIBPATH:${LD_LIBRARY_PATH:-}"
+      prepend_ld_path "$LIBPATH"
     fi
   fi
 fi
