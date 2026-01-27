@@ -21,6 +21,7 @@ from utils import clamp_timeout, compute_deadline, ensure_venv, time_left
 ensure_venv()
 
 from fetch_news import PortfolioError, get_market_news, get_portfolio_movers, get_portfolio_news
+from ranking import rank_headlines
 from research import generate_research_content
 
 SCRIPT_DIR = Path(__file__).parent
@@ -61,17 +62,20 @@ LANG_PROMPTS = {
 
 
 def shorten_url(url: str) -> str:
-    """Shorten URL using is.gd service."""
+    """Shorten URL using is.gd service (GET request)."""
     if not url or len(url) < 30:  # Don't shorten short URLs
         return url
         
     try:
         api_url = "https://is.gd/create.php"
-        data = urllib.parse.urlencode({'format': 'simple', 'url': url}).encode()
-        req = urllib.request.Request(api_url, data=data)
+        params = urllib.parse.urlencode({'format': 'simple', 'url': url})
+        req = urllib.request.Request(
+            f"{api_url}?{params}",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; finance-news/1.0)"}
+        )
         
         # Set a short timeout - if it's slow, just use original
-        with urllib.request.urlopen(req, timeout=2) as response:
+        with urllib.request.urlopen(req, timeout=3) as response:
             short_url = response.read().decode('utf-8').strip()
             if short_url.startswith('http'):
                 return short_url
@@ -322,36 +326,51 @@ def select_top_headlines(
     translation_models: list[str] | None = None,
     shortlist_size: int = HEADLINE_SHORTLIST_SIZE,
 ) -> tuple[list[dict], list[dict], str | None, str | None]:
-    groups = group_headlines(headlines)
-    for group in groups:
-        group["score"] = score_headline_group(group)
+    """Select top headlines using deterministic ranking.
+    
+    Uses rank_headlines() for impact-based scoring with source caps and diversity.
+    Falls back to LLM selection only if ranking produces no results.
+    """
+    # Use new deterministic ranking (source cap, diversity quotas)
+    ranked = rank_headlines(headlines)
+    selected = ranked.get("must_read", [])
+    scan = ranked.get("scan", [])
+    shortlist = selected + scan  # Combined for backwards compatibility
+    
+    # If ranking produced no results, fall back to old grouping method
+    if not selected:
+        groups = group_headlines(headlines)
+        for group in groups:
+            group["score"] = score_headline_group(group)
+        groups.sort(key=lambda g: g["score"], reverse=True)
+        shortlist = groups[:shortlist_size]
+        
+        if not shortlist:
+            return [], [], None, None
+        
+        # Use LLM to select from shortlist
+        selected_ids: list[int] = []
+        remaining = time_left(deadline)
+        if remaining is None or remaining >= 10:
+            selected_ids = select_top_headline_ids(shortlist, deadline, model=model)
+        if not selected_ids:
+            selected_ids = list(range(1, min(TOP_HEADLINES_COUNT, len(shortlist)) + 1))
+        
+        selected = []
+        for idx in selected_ids:
+            if 1 <= idx <= len(shortlist):
+                selected.append(shortlist[idx - 1])
 
-    groups.sort(key=lambda g: g["score"], reverse=True)
-    shortlist = groups[:shortlist_size]
-
-    if not shortlist:
-        return [], [], None, None
-
-    selected_ids: list[int] = []
-    remaining = time_left(deadline)
-    if remaining is None or remaining >= 10:
-        selected_ids = select_top_headline_ids(shortlist, deadline, model=model)
-    if not selected_ids:
-        selected_ids = list(range(1, min(TOP_HEADLINES_COUNT, len(shortlist)) + 1))
-
-    selected = []
-    for idx in selected_ids:
-        if 1 <= idx <= len(shortlist):
-            selected.append(shortlist[idx - 1])
-
+    # Normalize source/link fields
     for item in shortlist:
-        sources = sorted(item.get("sources", []))
-        links = sorted(item.get("links", []))
+        sources = sorted(item.get("sources", [item.get("source", "Unknown")]))
+        links = sorted(item.get("links", [item.get("link", "")]))
         item["sources"] = sources
         item["links"] = links
         item["source"] = ", ".join(sources) if sources else "Unknown"
         item["link"] = links[0] if links else ""
 
+    # Translate to German if needed
     translation_used = None
     if language == "de":
         titles = [item["title"] for item in selected]

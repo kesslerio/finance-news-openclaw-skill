@@ -34,8 +34,8 @@
     "reuters": {
       "name": "Reuters",
       "enabled": true,
-      "markets": "https://news.google.com/rss/search?q=site%3Areuters.com&hl=en-US&gl=US&ceid=US%3Aen",
-      "note": "Google News RSS wrapper for Reuters."
+      "markets": "https://news.google.com/rss/search?q=site%3Areuters.com+markets+OR+stocks+OR+economy+OR+fed+OR+earnings&hl=en-US&gl=US&ceid=US%3Aen",
+      "note": "Google News RSS wrapper for Reuters - filtered for finance/markets."
     },
     "ft": {
       "name": "Financial Times",
