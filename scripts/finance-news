@@ -15,11 +15,20 @@ SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 BASE_DIR="$( cd -P "${SCRIPT_DIR}/.." && pwd )"
 
 # NixOS Fix: Ensure libstdc++.so.6 is in LD_LIBRARY_PATH for numpy/yfinance
+# NixOS/Linuxbrew Fix: Ensure libstdc++.so.6 is available for numpy/yfinance
 if [[ -d "/nix/store" ]]; then
-  # Try to find libstdc++.so.6 in the store
-  LIBPATH=$(find /nix/store -maxdepth 2 -name "*-gcc-*-lib" -print -quit 2>/dev/null)/lib
-  if [[ -d "$LIBPATH" ]]; then
-    export LD_LIBRARY_PATH="$LIBPATH:$LD_LIBRARY_PATH"
+  # Priority 1: Linuxbrew (most reliable)
+  if [[ -d "/home/linuxbrew/.linuxbrew/lib" ]]; then
+    export LD_LIBRARY_PATH="/home/linuxbrew/.linuxbrew/lib:${LD_LIBRARY_PATH:-}"
+  # Priority 2: User Linuxbrew
+  elif [[ -d "$HOME/.linuxbrew/lib" ]]; then
+    export LD_LIBRARY_PATH="$HOME/.linuxbrew/lib:${LD_LIBRARY_PATH:-}"
+  # Priority 3: Nix store (slow fallback)
+  else
+    LIBPATH=$(find /nix/store -maxdepth 2 -name "*-gcc-*-lib" -print -quit 2>/dev/null)/lib
+    if [[ -d "$LIBPATH" ]]; then
+      export LD_LIBRARY_PATH="$LIBPATH:${LD_LIBRARY_PATH:-}"
+    fi
   fi
 fi
 
