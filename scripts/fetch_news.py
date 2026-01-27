@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -19,6 +20,63 @@ import yfinance as yf
 import pandas as pd
 
 from utils import clamp_timeout, compute_deadline, ensure_venv, time_left
+
+# Retry configuration
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_RETRY_DELAY = 1  # Base delay in seconds (exponential backoff)
+
+
+def fetch_with_retry(
+    url: str,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    base_delay: float = DEFAULT_RETRY_DELAY,
+    timeout: int = 15,
+    deadline: float | None = None,
+) -> bytes | None:
+    """
+    Fetch URL content with exponential backoff retry.
+
+    Args:
+        url: URL to fetch
+        max_retries: Maximum number of retry attempts
+        base_delay: Base delay in seconds (exponential backoff: delay * 2^attempt)
+        timeout: Request timeout in seconds
+        deadline: Overall deadline timestamp
+
+    Returns:
+        Response content as bytes (feedparser handles encoding), or None if all retries failed
+    """
+    last_error = None
+
+    for attempt in range(max_retries + 1):  # +1 because attempt 0 is the first try
+        # Check deadline before each attempt
+        if time_left(deadline) is not None and time_left(deadline) <= 0:
+            print(f"⚠️ Deadline exceeded, skipping fetch: {url}", file=sys.stderr)
+            return None
+
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Clawdbot/1.0'})
+            with urllib.request.urlopen(req, timeout=timeout, context=SSL_CONTEXT) as response:
+                return response.read()
+        except urllib.error.URLError as e:
+            last_error = e
+            if attempt < max_retries:
+                delay = base_delay * (2 ** attempt)  # Exponential backoff
+                print(f"⚠️ Fetch failed (attempt {attempt + 1}/{max_retries + 1}): {e}. Retrying in {delay}s...", file=sys.stderr)
+                time.sleep(delay)
+        except TimeoutError:
+            last_error = TimeoutError("Request timed out")
+            if attempt < max_retries:
+                delay = base_delay * (2 ** attempt)
+                print(f"⚠️ Timeout (attempt {attempt + 1}/{max_retries + 1}). Retrying in {delay}s...", file=sys.stderr)
+                time.sleep(delay)
+        except Exception as e:
+            last_error = e
+            print(f"⚠️ Unexpected error fetching {url}: {e}", file=sys.stderr)
+            return None
+
+    print(f"⚠️ All {max_retries + 1} attempts failed for {url}: {last_error}", file=sys.stderr)
+    return None
 
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_DIR = SCRIPT_DIR.parent / "config"
@@ -166,55 +224,55 @@ def _get_best_feed_url(feeds: dict) -> str | None:
     return None
 
 
-def fetch_rss(url: str, limit: int = 10, timeout: int = 15) -> list[dict]:
-    """Fetch and parse RSS/Atom feed using feedparser."""
-    try:
-        # Fetch feed content first (handles SSL/certs properly)
-        req = urllib.request.Request(url, headers={'User-Agent': 'Clawdbot/1.0'})
-        with urllib.request.urlopen(req, timeout=timeout, context=SSL_CONTEXT) as response:
-            content = response.read()
-        
-        # Parse with feedparser (handles RSS and Atom formats)
-        parsed = feedparser.parse(content)
-        
-        items = []
-        for entry in parsed.entries[:limit]:
-            # Skip entries without title or link
-            title = entry.get('title', '').strip()
-            if not title:
-                continue
-            
-            # Link handling: Atom uses 'link' dict, RSS uses string
-            link = entry.get('link', '')
-            if isinstance(link, dict):
-                link = link.get('href', '').strip()
-            if not link:
-                continue
-            
-            # Date handling: different formats across feeds
-            published = entry.get('published', '') or entry.get('updated', '')
-            published_at = None
-            if published:
-                try:
-                    published_at = parsedate_to_datetime(published).timestamp()
-                except Exception:
-                    published_at = None
-            
-            # Description handling: summary vs description
-            description = entry.get('summary', '') or entry.get('description', '')
-            
-            items.append({
-                'title': title,
-                'link': link,
-                'date': published.strip() if published else '',
-                'published_at': published_at,
-                'description': (description or '')[:200].strip()
-            })
-        
-        return items
-    except Exception as e:
-        print(f"⚠️ Error fetching {url}: {e}", file=sys.stderr)
+def fetch_rss(url: str, limit: int = 10, timeout: int = 15, deadline: float | None = None) -> list[dict]:
+    """Fetch and parse RSS/Atom feed using feedparser with retry logic."""
+    # Fetch content with retry (returns bytes for feedparser to handle encoding)
+    content = fetch_with_retry(url, timeout=timeout, deadline=deadline)
+    if content is None:
         return []
+
+    # Parse with feedparser (handles RSS and Atom formats, auto-detects encoding from bytes)
+    try:
+        parsed = feedparser.parse(content)
+    except Exception as e:
+        print(f"⚠️ Error parsing feed {url}: {e}", file=sys.stderr)
+        return []
+
+    items = []
+    for entry in parsed.entries[:limit]:
+        # Skip entries without title or link
+        title = entry.get('title', '').strip()
+        if not title:
+            continue
+
+        # Link handling: Atom uses 'link' dict, RSS uses string
+        link = entry.get('link', '')
+        if isinstance(link, dict):
+            link = link.get('href', '').strip()
+        if not link:
+            continue
+
+        # Date handling: different formats across feeds
+        published = entry.get('published', '') or entry.get('updated', '')
+        published_at = None
+        if published:
+            try:
+                published_at = parsedate_to_datetime(published).timestamp()
+            except Exception:
+                published_at = None
+
+        # Description handling: summary vs description
+        description = entry.get('summary', '') or entry.get('description', '')
+
+        items.append({
+            'title': title,
+            'link': link,
+            'date': published.strip() if published else '',
+            'published_at': published_at,
+            'description': (description or '')[:200].strip()
+        })
+
+    return items
 
 
 def fetch_market_data(
@@ -509,7 +567,7 @@ def get_market_news(
                     effective_timeout = clamp_timeout(rss_timeout, deadline)
                 except TimeoutError:
                     break
-                articles = fetch_rss(feed_url, limit, timeout=effective_timeout)
+                articles = fetch_rss(feed_url, limit, timeout=effective_timeout, deadline=deadline)
                 for article in articles:
                     article['source_id'] = source
                     article['source'] = feeds.get('name', source)
