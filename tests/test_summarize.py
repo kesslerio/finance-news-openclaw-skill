@@ -15,9 +15,9 @@ def test_generate_briefing_auto_time_evening(capsys, monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [
-                {"source": "CNBC", "title": "Headline one"},
-                {"source": "Yahoo", "title": "Headline two"},
-                {"source": "CNBC", "title": "Headline three"},
+                {"source": "CNBC", "title": "Headline one", "link": "https://example.com/1"},
+                {"source": "Yahoo", "title": "Headline two", "link": "https://example.com/2"},
+                {"source": "CNBC", "title": "Headline three", "link": "https://example.com/3"},
             ],
             "markets": {
                 "us": {
@@ -50,9 +50,10 @@ def test_generate_briefing_auto_time_evening(capsys, monkeypatch):
             "deadline": None,
             "fast": False,
             "llm": False,
+            "debug": False,
         },
     )()
 
     summarize.generate_briefing(args)
     stdout = capsys.readouterr().out
-    assert "Börsen-Abend-Briefing" in stdout
+    assert "Börsen Abend-Briefing" in stdout

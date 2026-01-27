@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 import json
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 from fetch_news import fetch_market_data, fetch_rss, _get_best_feed_url
 from utils import clamp_timeout, compute_deadline
 
@@ -21,7 +21,7 @@ def sample_rss_content():
 def test_fetch_rss_success(sample_rss_content):
     """Test successful RSS fetch and parse."""
     with patch("urllib.request.urlopen") as mock_urlopen:
-        mock_response = Mock()
+        mock_response = MagicMock()
         mock_response.read.return_value = sample_rss_content
         mock_response.__enter__.return_value = mock_response
         mock_urlopen.return_value = mock_response
@@ -59,7 +59,6 @@ def test_get_best_feed_url_fallback():
     """Test feed URL falls back to other http URLs when priority keys missing."""
     source = {
         "name": "Test Source",
-        "homepage": "https://example.com",
         "feed": "https://example.com/feed.xml"
     }
     
