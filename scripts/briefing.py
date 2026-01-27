@@ -20,28 +20,28 @@ ensure_venv()
 
 
 def send_to_whatsapp(message: str, group_name: str = "Niemand Boerse"):
-    """Send message to WhatsApp group via Clawdbot message tool."""
-    # Use clawdbot message tool
+    """Send message to WhatsApp group via Clawdbot message tool using stdin."""
+    # Use clawdbot message tool with stdin to avoid shell arg limits
     try:
         result = subprocess.run(
             [
                 'clawdbot', 'message', 'send',
                 '--channel', 'whatsapp',
-                '--target', group_name,
-                '--message', message
+                '--target', group_name
             ],
-            capture_output=True,
+            input=message,
             text=True,
+            capture_output=True,
             timeout=30
         )
-        
+
         if result.returncode == 0:
             print(f"✅ Sent to WhatsApp group: {group_name}", file=sys.stderr)
             return True
         else:
             print(f"⚠️ WhatsApp send failed: {result.stderr}", file=sys.stderr)
             return False
-    
+
     except Exception as e:
         print(f"❌ WhatsApp error: {e}", file=sys.stderr)
         return False
