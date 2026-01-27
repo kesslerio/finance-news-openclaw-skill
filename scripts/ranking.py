@@ -19,7 +19,6 @@ Output:
 import re
 from datetime import datetime
 from difflib import SequenceMatcher
-from pathlib import Path
 
 
 # Category keywords for classification
@@ -287,10 +286,12 @@ def rank_headlines(headlines: list[dict], config: dict | None = None) -> dict:
     capped = apply_source_cap(ranked, cfg["source_cap"])
     
     # Step 5: Select must_read with diversity quota
+    # Leave room for diversity additions by taking count-1 initially
     must_read_candidates = [a for a in capped if a.get("_score", 0) >= cfg["must_read_min_score"]]
-    must_read = must_read_candidates[:cfg["must_read_count"]]
+    must_read_count = cfg["must_read_count"]
+    must_read = must_read_candidates[:max(1, must_read_count - 2)]  # Reserve 2 slots for diversity
     must_read = ensure_diversity(must_read, capped, ["macro", "equities", "geopolitics"])
-    must_read = must_read[:cfg["must_read_count"]]  # Trim back if diversity added extras
+    must_read = must_read[:must_read_count]  # Final trim to exact count
     
     # Step 6: Select scan (additional items)
     scan_candidates = [a for a in capped if a not in must_read and a.get("_score", 0) >= cfg["scan_min_score"]]
