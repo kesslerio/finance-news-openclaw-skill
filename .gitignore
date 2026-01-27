@@ -24,3 +24,6 @@ config/cookies.json
 config/portfolio.csv
 config/sources.json
 config/translations.json
+
+# Personal data
+config/stocks.json
