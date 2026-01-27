@@ -229,55 +229,78 @@ def fetch_market_data(
         print("❌ openbb-quote not available - skipping market data fetch", file=sys.stderr)
         return results
     
-    for symbol in symbols:
+    if not symbols:
+        return results
+
+    try:
         try:
+            # Scale timeout by number of symbols, but clamp to deadline
+            effective_timeout = clamp_timeout(max(timeout, 10 + len(symbols) * 2), deadline)
+        except TimeoutError:
+            return results
+
+        # Call openbb-quote with all symbols at once for efficiency
+        result = subprocess.run(
+            [OPENBB_BINARY] + symbols,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=effective_timeout,
+            check=False
+        )
+
+        if result.returncode == 0:
             try:
-                effective_timeout = clamp_timeout(timeout, deadline)
-            except TimeoutError:
-                return results
-            result = subprocess.run(
-                [OPENBB_BINARY, symbol],
-                capture_output=True,
-                text=True,
-                stdin=subprocess.DEVNULL,
-                timeout=effective_timeout,
-                check=False
-            )
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
+                raw_data = json.loads(result.stdout)
+                
+                # Ensure we have a list of dicts
+                # Handle openbb-quote's {"results": [...]} wrapper format
+                if isinstance(raw_data, dict):
+                    if "results" in raw_data and isinstance(raw_data["results"], list):
+                        raw_items = raw_data["results"]
+                    else:
+                        raw_items = [raw_data]
+                elif isinstance(raw_data, list):
+                    raw_items = raw_data
+                else:
+                    raw_items = []
 
-                # Normalize provider output
-                if isinstance(data, dict) and "results" in data and isinstance(data["results"], list):
-                    data = data["results"][0] if data["results"] else {}
-                elif isinstance(data, list):
-                    data = data[0] if data else {}
+                for data in raw_items:
+                    if not isinstance(data, dict):
+                        continue
+                        
+                    symbol = data.get("symbol")
+                    if not symbol:
+                        continue
+                    
+                    # Fix missing prices for indices only when explicitly allowed.
+                    if allow_price_fallback and data.get("price") is None:
+                        if data.get("open") is not None:
+                            data["price"] = data["open"]
+                        elif data.get("prev_close") is not None:
+                            data["price"] = data["prev_close"]
 
-                # Fix missing prices for indices only when explicitly allowed.
-                if allow_price_fallback and isinstance(data, dict) and data.get("price") is None:
-                    if data.get("open") is not None:
-                        data["price"] = data["open"]
-                    elif data.get("prev_close") is not None:
-                        data["price"] = data["prev_close"]
+                    # Calculate change_percent
+                    if (
+                        data.get("change_percent") is None
+                        and data.get("price")
+                        and data.get("prev_close")
+                    ):
+                        price = data["price"]
+                        prev_close = data["prev_close"]
+                        if prev_close != 0:
+                            data["change_percent"] = ((price - prev_close) / prev_close) * 100
 
-                # Calculate change_percent
-                if (
-                    isinstance(data, dict)
-                    and data.get("change_percent") is None
-                    and data.get("price")
-                    and data.get("prev_close")
-                ):
-                    price = data["price"]
-                    prev_close = data["prev_close"]
-                    if prev_close != 0:
-                        data["change_percent"] = ((price - prev_close) / prev_close) * 100
+                    results[symbol] = data
+            except json.JSONDecodeError as e:
+                print(f"⚠️ Invalid JSON from openbb-quote: {e}", file=sys.stderr)
+        else:
+            print(f"⚠️ openbb-quote failed with code {result.returncode}: {result.stderr}", file=sys.stderr)
 
-                results[symbol] = data
-        except subprocess.TimeoutExpired:
-            print(f"⚠️ Timeout fetching {symbol}", file=sys.stderr)
-        except json.JSONDecodeError as e:
-            print(f"⚠️ Invalid JSON from openbb-quote for {symbol}: {e}", file=sys.stderr)
-        except Exception as e:
-            print(f"⚠️ Error fetching {symbol}: {e}", file=sys.stderr)
+    except subprocess.TimeoutExpired:
+        print(f"⚠️ Timeout fetching symbols: {', '.join(symbols[:5])}...", file=sys.stderr)
+    except Exception as e:
+        print(f"⚠️ Error fetching symbols: {e}", file=sys.stderr)
     
     return results
 
@@ -431,15 +454,15 @@ def get_market_news(
         if max_indices_per_region is not None:
             symbols = symbols[:max_indices_per_region]
 
+        # Batch fetch all indices in the region
+        data = fetch_market_data(
+            symbols,
+            timeout=subprocess_timeout,
+            deadline=deadline,
+            allow_price_fallback=True,
+        )
+        
         for symbol in symbols:
-            if time_left(deadline) is not None and time_left(deadline) <= 0:
-                break
-            data = fetch_market_data(
-                [symbol],
-                timeout=subprocess_timeout,
-                deadline=deadline,
-                allow_price_fallback=True,
-            )
             if symbol in data:
                 result['markets'][region]['indices'][symbol] = {
                     'name': config['index_names'].get(symbol, symbol),
@@ -523,6 +546,13 @@ def get_portfolio_news(
         'stocks': {}
     }
     
+    # Fetch all quotes at once for efficiency
+    all_quotes = fetch_market_data(
+        symbols,
+        timeout=subprocess_timeout,
+        deadline=deadline,
+    )
+    
     for symbol in symbols:
         if time_left(deadline) is not None and time_left(deadline) <= 0:
             print("⚠️ Deadline exceeded; returning partial portfolio news", file=sys.stderr)
@@ -531,14 +561,9 @@ def get_portfolio_news(
             continue
         
         articles = fetch_ticker_news(symbol, limit)
-        quotes = fetch_market_data(
-            [symbol],
-            timeout=subprocess_timeout,
-            deadline=deadline,
-        )
         
         news['stocks'][symbol] = {
-            'quote': quotes.get(symbol, {}),
+            'quote': all_quotes.get(symbol, {}),
             'articles': articles
         }
 
