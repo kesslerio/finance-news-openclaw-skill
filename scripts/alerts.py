@@ -127,10 +127,31 @@ def cmd_set(args) -> None:
         print(f"⚠️ Alert for {ticker} already exists. Use 'update' to change target.")
         return
     
+    # Validate target price
+    if args.target <= 0:
+        print(f"❌ Target price must be greater than 0")
+        return
+    
     currency = args.currency.upper() if args.currency else "USD"
     if currency not in SUPPORTED_CURRENCIES:
         print(f"❌ Currency {currency} not supported. Use: {', '.join(SUPPORTED_CURRENCIES)}")
         return
+    
+    # Warn about currency mismatch based on ticker suffix
+    ticker_currency_map = {
+        ".T": "JPY",      # Tokyo
+        ".SI": "SGD",     # Singapore
+        ".MX": "MXN",     # Mexico
+        ".DE": "EUR", ".F": "EUR", ".PA": "EUR",  # Europe
+    }
+    expected_currency = "USD"  # Default for US stocks
+    for suffix, curr in ticker_currency_map.items():
+        if ticker.endswith(suffix):
+            expected_currency = curr
+            break
+    
+    if currency != expected_currency:
+        print(f"⚠️ Warning: {ticker} trades in {expected_currency}, but alert set in {currency}")
     
     # Fetch current price (optional - may fail if numpy broken)
     current_price = None
@@ -211,6 +232,11 @@ def cmd_update(args) -> None:
         print(f"❌ No alert found for {ticker}")
         return
     
+    # Validate target price
+    if args.target <= 0:
+        print(f"❌ Target price must be greater than 0")
+        return
+    
     old_target = alert["target_price"]
     alert["target_price"] = args.target
     if args.note:
@@ -268,7 +294,11 @@ def cmd_check(args) -> None:
         if price is None:
             continue
         
-        pct_diff = ((price - target) / target) * 100
+        # Divide-by-zero protection
+        if target == 0:
+            pct_diff = 0
+        else:
+            pct_diff = ((price - target) / target) * 100
         
         result = {
             "ticker": ticker,
@@ -282,8 +312,11 @@ def cmd_check(args) -> None:
         
         if price <= target:
             triggered.append(result)
-            # Update triggered count
-            alert["triggered_count"] = alert.get("triggered_count", 0) + 1
+            # Update triggered count (only once per day to avoid inflation)
+            last_triggered = alert.get("last_triggered")
+            today = now.strftime("%Y-%m-%d")
+            if not last_triggered or not last_triggered.startswith(today):
+                alert["triggered_count"] = alert.get("triggered_count", 0) + 1
             alert["last_triggered"] = now.isoformat()
         else:
             watching.append(result)
@@ -354,7 +387,11 @@ def check_alerts() -> dict:
         if price is None:
             continue
         
-        pct_diff = ((price - target) / target) * 100
+        # Divide-by-zero protection
+        if target == 0:
+            pct_diff = 0
+        else:
+            pct_diff = ((price - target) / target) * 100
         
         result = {
             "ticker": ticker,
@@ -368,7 +405,11 @@ def check_alerts() -> dict:
         
         if price <= target:
             triggered.append(result)
-            alert["triggered_count"] = alert.get("triggered_count", 0) + 1
+            # Update triggered count (only once per day to avoid inflation)
+            last_triggered = alert.get("last_triggered")
+            today = now.strftime("%Y-%m-%d")
+            if not last_triggered or not last_triggered.startswith(today):
+                alert["triggered_count"] = alert.get("triggered_count", 0) + 1
             alert["last_triggered"] = now.isoformat()
         else:
             watching.append(result)
