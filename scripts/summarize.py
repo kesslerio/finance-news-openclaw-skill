@@ -211,11 +211,11 @@ def extract_agent_reply(raw: str) -> str:
     return raw.strip()
 
 
-def run_agent_prompt(prompt: str, model: str = "claude", deadline: float | None = None, session_id: str = "finance-news-headlines") -> str:
+def run_agent_prompt(prompt: str, model: str = "claude", deadline: float | None = None, session_id: str = "finance-news-headlines", timeout: int = 45) -> str:
     """Run a short prompt against clawdbot agent and return raw reply text."""
     try:
-        cli_timeout = clamp_timeout(30, deadline)
-        proc_timeout = clamp_timeout(40, deadline)
+        cli_timeout = clamp_timeout(timeout, deadline)
+        proc_timeout = clamp_timeout(timeout + 10, deadline)
         cmd = [
             'clawdbot', 'agent',
             '--session-id', session_id,
@@ -423,12 +423,18 @@ def translate_headlines(
     deadline: float | None,
     model_order: list[str],
 ) -> tuple[list[str], str | None]:
+    """Translate headlines to German using LLM.
+    
+    Returns (translated_titles, model_used) or (original_titles, None) on failure.
+    """
     if not titles:
         return [], None
+    
     prompt_lines = [
-        "Translate the following English headlines to German.",
-        "Return JSON only: [\"...\"] in the same order.",
-        "Preserve meaning. Do not add facts or commentary.",
+        "Translate these English headlines to German.",
+        "Return ONLY a JSON array of strings in the same order.",
+        "Example: [\"Übersetzung 1\", \"Übersetzung 2\"]",
+        "Do not add commentary.",
         "",
         "Headlines:"
     ]
@@ -437,16 +443,38 @@ def translate_headlines(
     prompt = "\n".join(prompt_lines)
 
     for model in model_order:
-        reply = run_agent_prompt(prompt, model=model, deadline=deadline, session_id="finance-news-translate")
+        print(f"🔤 Translating {len(titles)} headlines with {model}...", file=sys.stderr)
+        reply = run_agent_prompt(prompt, model=model, deadline=deadline, session_id="finance-news-translate", timeout=60)
+        
         if reply.startswith("⚠️"):
+            print(f"  ↳ {model} failed: {reply}", file=sys.stderr)
             continue
+        
+        # Try to extract JSON from reply (may have markdown wrapper)
+        json_text = reply.strip()
+        if "```" in json_text:
+            # Extract from markdown code block
+            match = re.search(r'```(?:json)?\s*(.*?)```', json_text, re.DOTALL)
+            if match:
+                json_text = match.group(1).strip()
+        
         try:
-            data = json.loads(reply)
-        except json.JSONDecodeError:
+            data = json.loads(json_text)
+        except json.JSONDecodeError as e:
+            print(f"  ↳ {model} JSON error: {e}", file=sys.stderr)
+            print(f"     Reply was: {reply[:200]}...", file=sys.stderr)
             continue
+        
         if isinstance(data, list) and all(isinstance(item, str) for item in data):
             if len(data) == len(titles):
+                print(f"  ↳ ✅ Translation successful with {model}", file=sys.stderr)
                 return data, model
+            else:
+                print(f"  ↳ {model} returned {len(data)} items, expected {len(titles)}", file=sys.stderr)
+        else:
+            print(f"  ↳ {model} returned invalid format: {type(data)}", file=sys.stderr)
+    
+    print(f"⚠️ Translation failed for all models, using English", file=sys.stderr)
     return titles, None
 
 
