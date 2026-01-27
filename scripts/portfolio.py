@@ -9,16 +9,104 @@ import sys
 from pathlib import Path
 
 PORTFOLIO_FILE = Path(__file__).parent.parent / "config" / "portfolio.csv"
+REQUIRED_COLUMNS = ['symbol', 'name']
+DEFAULT_COLUMNS = ['symbol', 'name', 'category', 'notes', 'type']
+
+
+def validate_portfolio_csv(path: Path) -> tuple[bool, list[str]]:
+    """
+    Validate portfolio CSV file for common issues.
+
+    Returns:
+        Tuple of (is_valid, list of warnings)
+    """
+    warnings = []
+
+    if not path.exists():
+        return True, warnings
+
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            # Check for encoding issues
+            content = f.read()
+
+        with open(path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+
+            # Check required columns
+            if reader.fieldnames is None:
+                warnings.append("CSV appears to be empty")
+                return False, warnings
+
+            missing_cols = set(REQUIRED_COLUMNS) - set(reader.fieldnames or [])
+            if missing_cols:
+                warnings.append(f"Missing required columns: {', '.join(missing_cols)}")
+
+            # Check for duplicate symbols
+            symbols = []
+            for row in reader:
+                symbol = row.get('symbol', '').strip().upper()
+                if symbol:
+                    symbols.append(symbol)
+
+            duplicates = [s for s in set(symbols) if symbols.count(s) > 1]
+            if duplicates:
+                warnings.append(f"Duplicate symbols found: {', '.join(duplicates)}")
+
+    except UnicodeDecodeError:
+        warnings.append("File encoding issue - try saving as UTF-8")
+    except Exception as e:
+        warnings.append(f"Error reading portfolio: {e}")
+        return False, warnings
+
+    return True, warnings
 
 
 def load_portfolio() -> list[dict]:
-    """Load portfolio from CSV."""
+    """Load portfolio from CSV with validation."""
     if not PORTFOLIO_FILE.exists():
         return []
-    
-    with open(PORTFOLIO_FILE, 'r') as f:
-        reader = csv.DictReader(f)
-        return list(reader)
+
+    # Validate first
+    is_valid, warnings = validate_portfolio_csv(PORTFOLIO_FILE)
+    for warning in warnings:
+        print(f"⚠️ Portfolio warning: {warning}", file=sys.stderr)
+
+    if not is_valid:
+        print("⚠️ Portfolio has errors - returning empty", file=sys.stderr)
+        return []
+
+    try:
+        with open(PORTFOLIO_FILE, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+
+            # Normalize data
+            portfolio = []
+            seen_symbols = set()
+
+            for row in reader:
+                symbol = row.get('symbol', '').strip().upper()
+                if not symbol:
+                    continue
+
+                # Skip duplicates (keep first occurrence)
+                if symbol in seen_symbols:
+                    continue
+                seen_symbols.add(symbol)
+
+                portfolio.append({
+                    'symbol': symbol,
+                    'name': row.get('name', symbol) or symbol,
+                    'category': row.get('category', '') or '',
+                    'notes': row.get('notes', '') or '',
+                    'type': row.get('type', 'Watchlist') or 'Watchlist'
+                })
+
+            return portfolio
+
+    except Exception as e:
+        print(f"⚠️ Error loading portfolio: {e}", file=sys.stderr)
+        return []
 
 
 def save_portfolio(portfolio: list[dict]):
