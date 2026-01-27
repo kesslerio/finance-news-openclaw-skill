@@ -1,0 +1,83 @@
+{
+  "_comment": "Manual earnings dates for stocks not covered by Finnhub API",
+  "_updated": "2026-01-27",
+  
+  "6857.T": {
+    "date": "2026-01-27",
+    "time": "amc",
+    "note": "Q3 FY2025 - Advantest",
+    "source": "marketscreener.com"
+  },
+  "6920.T": {
+    "date": "2026-02-02",
+    "time": "amc",
+    "note": "Q3 FY2025 - Lasertec",
+    "source": "tipranks.com"
+  },
+  "8035.T": {
+    "date": "2026-02-05",
+    "time": "amc",
+    "note": "Q3 FY2025 - Tokyo Electron",
+    "source": "tipranks.com"
+  },
+  "6146.T": {
+    "date": "2026-02-06",
+    "time": "amc",
+    "note": "Q3 FY2025 - Disco Corp",
+    "source": "estimate"
+  },
+  "7741.T": {
+    "date": "2026-01-30",
+    "time": "amc",
+    "note": "Q3 FY2025 - Hoya",
+    "source": "estimate"
+  },
+  "7735.T": {
+    "date": "2026-01-30",
+    "time": "amc",
+    "note": "Q3 FY2025 - Screen Holdings",
+    "source": "estimate"
+  },
+  "4063.T": {
+    "date": "2026-01-31",
+    "time": "amc",
+    "note": "Q3 FY2025 - Shin-Etsu Chemical",
+    "source": "estimate"
+  },
+  "6861.T": {
+    "date": "2026-01-29",
+    "time": "amc",
+    "note": "Q3 FY2025 - Keyence",
+    "source": "estimate"
+  },
+  "9984.T": {
+    "date": "2026-02-07",
+    "time": "amc",
+    "note": "Q3 FY2025 - SoftBank Group",
+    "source": "estimate"
+  },
+  "9983.T": {
+    "date": "2026-01-09",
+    "time": "amc",
+    "note": "Q1 FY2026 - Fast Retailing (Uniqlo)",
+    "source": "estimate"
+  },
+  "D05.SI": {
+    "date": "2026-02-10",
+    "time": "bmo",
+    "note": "Q4 2025 - DBS Group",
+    "source": "estimate"
+  },
+  "O39.SI": {
+    "date": "2026-02-21",
+    "time": "bmo", 
+    "note": "Q4 2025 - OCBC Bank",
+    "source": "estimate"
+  },
+  "S68.SI": {
+    "date": "2026-01-23",
+    "time": "bmo",
+    "note": "H1 FY2026 - Singapore Exchange",
+    "source": "estimate"
+  }
+}
