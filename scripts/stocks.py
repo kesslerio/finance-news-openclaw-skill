@@ -122,9 +122,12 @@ def add_to_holdings(
     ticker: str,
     name: str = "",
     category: str = "",
-    notes: str = ""
+    notes: str = "",
+    target: Optional[float] = None,
+    stop: Optional[float] = None,
+    alerts: Optional[list] = None
 ) -> bool:
-    """Add a stock to holdings."""
+    """Add a stock to holdings. Target/stop for 'buy more' alerts."""
     data = load_stocks()
     
     # Check if already in holdings
@@ -137,6 +140,12 @@ def add_to_holdings(
                 h["category"] = category
             if notes:
                 h["notes"] = notes
+            if target is not None:
+                h["target"] = target
+            if stop is not None:
+                h["stop"] = stop
+            if alerts is not None:
+                h["alerts"] = alerts
             save_stocks(data)
             return True
     
@@ -145,7 +154,10 @@ def add_to_holdings(
         "ticker": ticker,
         "name": name,
         "category": category,
-        "notes": notes
+        "notes": notes,
+        "target": target,
+        "stop": stop,
+        "alerts": alerts or []
     })
     data["holdings"].sort(key=lambda x: x.get("ticker", ""))
     save_stocks(data)
@@ -250,6 +262,8 @@ def main():
     add_hold.add_argument("--name", default="", help="Company name")
     add_hold.add_argument("--category", default="", help="Category")
     add_hold.add_argument("--notes", default="", help="Notes")
+    add_hold.add_argument("--target", type=float, help="Buy-more target price")
+    add_hold.add_argument("--stop", type=float, help="Stop loss price")
     
     # move (watchlist → holdings)
     move = subparsers.add_parser("move", help="Move from watchlist to holdings")
@@ -262,6 +276,12 @@ def main():
     remove.add_argument("ticker", help="Stock ticker")
     remove.add_argument("--from", dest="from_list", choices=["holdings", "watchlist", "both"],
                         default="both", help="Remove from which list")
+    
+    # set-alert (for existing holdings)
+    set_alert = subparsers.add_parser("set-alert", help="Set buy-more/stop alert on holding")
+    set_alert.add_argument("ticker", help="Stock ticker")
+    set_alert.add_argument("--target", type=float, help="Buy-more target price")
+    set_alert.add_argument("--stop", type=float, help="Stop loss price")
     
     args = parser.parse_args()
     
@@ -277,7 +297,8 @@ def main():
         print(f"✅ Added {args.ticker.upper()} to watchlist")
     
     elif args.command == "add-holding":
-        add_to_holdings(args.ticker.upper(), args.name, args.category, args.notes)
+        add_to_holdings(args.ticker.upper(), args.name, args.category, args.notes,
+                        args.target, args.stop)
         print(f"✅ Added {args.ticker.upper()} to holdings")
     
     elif args.command == "move":
@@ -289,6 +310,22 @@ def main():
             print(f"✅ Removed {args.ticker.upper()}")
         else:
             print(f"⚠️ {args.ticker.upper()} not found")
+    
+    elif args.command == "set-alert":
+        data = load_stocks()
+        found = False
+        for h in data["holdings"]:
+            if h.get("ticker") == args.ticker.upper():
+                if args.target is not None:
+                    h["target"] = args.target
+                if args.stop is not None:
+                    h["stop"] = args.stop
+                save_stocks(data)
+                found = True
+                print(f"✅ Set alert on {args.ticker.upper()}: target=${args.target}, stop=${args.stop}")
+                break
+        if not found:
+            print(f"⚠️ {args.ticker.upper()} not found in holdings")
     
     else:
         parser.print_help()
