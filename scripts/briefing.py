@@ -19,13 +19,18 @@ SCRIPT_DIR = Path(__file__).parent
 ensure_venv()
 
 
-def send_to_whatsapp(message: str, group_name: str = "Niemand Boerse"):
-    """Send message to WhatsApp group via Clawdbot message tool."""
-    # Use clawdbot message tool
+def send_to_whatsapp(message: str, group_name: str | None = None):
+    """Send message to WhatsApp group via moltbot message tool."""
+    if not group_name:
+        group_name = os.environ.get('FINANCE_NEWS_TARGET', '')
+    if not group_name:
+        print("❌ No target specified. Set FINANCE_NEWS_TARGET env var or use --group", file=sys.stderr)
+        return False
+    # Use moltbot message tool
     try:
         result = subprocess.run(
             [
-                'clawdbot', 'message', 'send',
+                'moltbot', 'message', 'send',
                 '--channel', 'whatsapp',
                 '--target', group_name,
                 '--message', message
@@ -143,8 +148,8 @@ def main():
                         help='Output language')
     parser.add_argument('--send', action='store_true',
                         help='Send to WhatsApp group')
-    parser.add_argument('--group', default='120363421796203667@g.us',
-                        help='WhatsApp group name')
+    parser.add_argument('--group', default=os.environ.get('FINANCE_NEWS_TARGET', ''),
+                        help='WhatsApp group name or JID (default: FINANCE_NEWS_TARGET env var)')
     parser.add_argument('--json', action='store_true',
                         help='Output as JSON')
     parser.add_argument('--deadline', type=int, default=None,

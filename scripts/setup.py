@@ -99,18 +99,18 @@ def setup_delivery(sources: dict):
     # Ensure delivery dict exists
     if 'delivery' not in sources:
         sources['delivery'] = {
-            'whatsapp': {'enabled': True, 'group': 'Niemand Boerse'},
+            'whatsapp': {'enabled': True, 'group': ''},
             'telegram': {'enabled': False, 'group': ''}
         }
-    
+
     # WhatsApp
-    wa_enabled = prompt_bool("Enable WhatsApp delivery", 
+    wa_enabled = prompt_bool("Enable WhatsApp delivery",
                               sources.get('delivery', {}).get('whatsapp', {}).get('enabled', True))
     sources['delivery']['whatsapp']['enabled'] = wa_enabled
-    
+
     if wa_enabled:
-        wa_group = prompt("  WhatsApp group name", 
-                          sources['delivery']['whatsapp'].get('group', 'Niemand Boerse'))
+        wa_group = prompt("  WhatsApp group name or JID",
+                          sources['delivery']['whatsapp'].get('group', ''))
         sources['delivery']['whatsapp']['group'] = wa_group
     
     # Telegram
@@ -176,8 +176,8 @@ def setup_cron_jobs(sources: dict):
     
     # Determine delivery target
     if delivery.get('whatsapp', {}).get('enabled'):
-        group = delivery['whatsapp'].get('group', 'Niemand Boerse')
-        send_cmd = f"--send --group '{group}'"
+        group = delivery['whatsapp'].get('group', '')
+        send_cmd = f"--send --group '{group}'" if group else ""
     elif delivery.get('telegram', {}).get('enabled'):
         group = delivery['telegram'].get('group', '')
         send_cmd = f"--send --group '{group}'"  # Would need telegram support
@@ -190,7 +190,7 @@ def setup_cron_jobs(sources: dict):
         tz = schedule['morning'].get('timezone', 'America/Los_Angeles')
         
         print(f"  Creating morning briefing job: {morning_cron} ({tz})")
-        # Note: Actual cron creation would happen via clawdbot cron add
+        # Note: Actual cron creation would happen via moltbot cron add
         print(f"    ✅ Morning briefing configured")
     
     # Evening job

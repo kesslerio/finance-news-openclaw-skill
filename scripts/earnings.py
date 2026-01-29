@@ -50,7 +50,7 @@ def get_fmp_key() -> str:
     """Get FMP API key from environment or .env file."""
     key = os.environ.get("FMP_API_KEY", "")
     if not key:
-        env_file = Path.home() / ".clawdbot" / ".env"
+        env_file = Path.home() / ".moltbot" / ".env"
         if env_file.exists():
             for line in env_file.read_text().splitlines():
                 if line.startswith("FMP_API_KEY="):
@@ -103,7 +103,7 @@ def get_finnhub_key() -> str:
     """Get Finnhub API key from environment or .env file."""
     key = os.environ.get("FINNHUB_API_KEY", "")
     if not key:
-        env_file = Path.home() / ".clawdbot" / ".env"
+        env_file = Path.home() / ".moltbot" / ".env"
         if env_file.exists():
             for line in env_file.read_text().splitlines():
                 if line.startswith("FINNHUB_API_KEY="):

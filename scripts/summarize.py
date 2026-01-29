@@ -212,12 +212,12 @@ def extract_agent_reply(raw: str) -> str:
 
 
 def run_agent_prompt(prompt: str, model: str = "claude", deadline: float | None = None, session_id: str = "finance-news-headlines", timeout: int = 45) -> str:
-    """Run a short prompt against clawdbot agent and return raw reply text."""
+    """Run a short prompt against moltbot agent and return raw reply text."""
     try:
         cli_timeout = clamp_timeout(timeout, deadline)
         proc_timeout = clamp_timeout(timeout + 10, deadline)
         cmd = [
-            'clawdbot', 'agent',
+            'moltbot', 'agent',
             '--session-id', session_id,
             '--message', prompt,
             '--json',
@@ -236,7 +236,7 @@ def run_agent_prompt(prompt: str, model: str = "claude", deadline: float | None 
     except TimeoutError:
         return "⚠️ LLM error: deadline exceeded"
     except FileNotFoundError:
-        return "⚠️ LLM error: clawdbot CLI not found"
+        return "⚠️ LLM error: moltbot CLI not found"
     except OSError as exc:
         return f"⚠️ LLM error: {exc}"
 
@@ -499,7 +499,7 @@ Use only the following information for the briefing:
         proc_timeout = clamp_timeout(150, deadline)
         result = subprocess.run(
             [
-                'clawdbot', 'agent',
+                'moltbot', 'agent',
                 '--session-id', 'finance-news-briefing',
                 '--message', prompt,
                 '--json',
@@ -514,7 +514,7 @@ Use only the following information for the briefing:
     except TimeoutError:
         return "⚠️ Claude briefing error: deadline exceeded"
     except FileNotFoundError:
-        return "⚠️ Claude briefing error: clawdbot CLI not found"
+        return "⚠️ Claude briefing error: moltbot CLI not found"
     except OSError as exc:
         return f"⚠️ Claude briefing error: {exc}"
 
@@ -534,7 +534,7 @@ def summarize_with_minimax(
     style: str = "briefing",
     deadline: float | None = None,
 ) -> str:
-    """Generate AI summary using MiniMax model via clawdbot agent."""
+    """Generate AI summary using MiniMax model via moltbot agent."""
     prompt = f"""{STYLE_PROMPTS.get(style, STYLE_PROMPTS['briefing'])}
 
 {LANG_PROMPTS.get(language, LANG_PROMPTS['de'])}
@@ -549,7 +549,7 @@ Use only the following information for the briefing:
         proc_timeout = clamp_timeout(150, deadline)
         result = subprocess.run(
             [
-                'clawdbot', 'agent',
+                'moltbot', 'agent',
                 '--session-id', 'finance-news-briefing',
                 '--message', prompt,
                 '--model', 'minimax',
@@ -565,7 +565,7 @@ Use only the following information for the briefing:
     except TimeoutError:
         return "⚠️ MiniMax briefing error: deadline exceeded"
     except FileNotFoundError:
-        return "⚠️ MiniMax briefing error: clawdbot CLI not found"
+        return "⚠️ MiniMax briefing error: moltbot CLI not found"
     except OSError as exc:
         return f"⚠️ MiniMax briefing error: {exc}"
 

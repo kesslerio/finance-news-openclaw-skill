@@ -11,7 +11,7 @@ Generates a market briefing and sends to WhatsApp with an approval gate.
 **Usage:**
 ```bash
 # Run via Lobster CLI
-lobster "workflows.run --file ~/projects/finance-news-clawdbot-skill/workflows/briefing.yaml"
+lobster "workflows.run --file ~/projects/finance-news-moltbot-skill/workflows/briefing.yaml"
 
 # With custom args
 lobster "workflows.run --file workflows/briefing.yaml --args-json '{\"time\":\"evening\",\"lang\":\"en\"}'"
@@ -55,7 +55,7 @@ lobster "workflows.run --file workflows/briefing.yaml --args-json '{\"channel\":
 **Requirements:**
 - Docker with `finance-news-briefing` image built
 - `jq` for JSON parsing
-- `clawdbot` CLI for message delivery
+- `moltbot` CLI for message delivery
 
 ## Adding to Lobster Registry
 

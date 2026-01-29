@@ -151,12 +151,12 @@ Location: `~/clawd/skills/finance-news/config/config.json` (legacy fallback: `co
 
 ```bash
 # Add morning briefing cron job
-clawdbot cron add --schedule "30 6 * * 1-5" \
+moltbot cron add --schedule "30 6 * * 1-5" \
   --timezone "America/Los_Angeles" \
   --command "bash ~/clawd/skills/finance-news/cron/morning.sh"
 
 # Add evening briefing cron job
-clawdbot cron add --schedule "0 13 * * 1-5" \
+moltbot cron add --schedule "0 13 * * 1-5" \
   --timezone "America/Los_Angeles" \
   --command "bash ~/clawd/skills/finance-news/cron/evening.sh"
 ```
@@ -277,4 +277,4 @@ gemini  # Follow login flow
 
 ### WhatsApp delivery failing
 - Verify WhatsApp group exists and bot has access
-- Check `clawdbot doctor` for WhatsApp status
+- Check `moltbot doctor` for WhatsApp status

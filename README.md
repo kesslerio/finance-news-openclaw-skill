@@ -1,82 +1,127 @@
-# Finance News Skill for Clawdbot
+# Finance News Skill for Moltbot
 
 AI-powered market news briefings with configurable language output and automated delivery.
 
 ## Features
 
-- 📰 **Multi-source aggregation:** WSJ, Barron's, CNBC, Yahoo Finance
-- 📊 **Global markets:** US, Europe (DAX, STOXX), Japan (Nikkei)
-- 🤖 **AI summaries:** Gemini-powered analysis in German or English
-- 📅 **Automated briefings:** Morning (market open) and evening (market close)
-- 📤 **WhatsApp delivery:** Send briefings to your group
-- 📋 **Portfolio tracking:** Personalized news for your stocks
+- **Multi-source aggregation:** Reuters, WSJ, FT, Bloomberg, CNBC, Yahoo Finance, Tagesschau, Handelsblatt
+- **Global markets:** US (S&P, Dow, NASDAQ), Europe (DAX, STOXX, FTSE), Japan (Nikkei)
+- **AI summaries:** LLM-powered analysis in German or English
+- **Automated briefings:** Morning (market open) and evening (market close)
+- **WhatsApp/Telegram delivery:** Send briefings via moltbot
+- **Portfolio tracking:** Personalized news for your stocks with price alerts
+- **Lobster workflows:** Approval gates before sending
 
 ## Quick Start
 
-```bash
-# First-time setup (interactive wizard)
-finance-news setup
+### Docker (Recommended)
 
-# Generate a briefing (deterministic by default)
+```bash
+# Build the Docker image
+docker build -t finance-news-briefing .
+
+# Generate a briefing
+docker run --rm -v "$PWD/config:/app/config:ro" \
+  finance-news-briefing python3 scripts/briefing.py \
+  --time morning --lang de --json --fast
+```
+
+### Lobster Workflow
+
+```bash
+# Set required environment variables
+export FINANCE_NEWS_TARGET="your-group-jid@g.us"  # WhatsApp JID or Telegram chat ID
+export FINANCE_NEWS_CHANNEL="whatsapp"            # or "telegram"
+
+# Run workflow (halts for approval before sending)
+lobster run workflows/briefing.yaml --args-json '{"time":"morning","lang":"de"}'
+```
+
+### CLI (Legacy)
+
+```bash
+# Generate a briefing
 finance-news briefing --morning --lang de
 
-# Use LLM summaries (optional)
-finance-news briefing --morning --lang de --llm
-
-# Use fast mode + deadline (recommended for gateway)
+# Use fast mode + deadline (recommended)
 finance-news briefing --morning --lang de --fast --deadline 300
-
-# View market overview
-finance-news market
-
-# Get news for your portfolio
-finance-news portfolio
 ```
+
+## Environment Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `FINANCE_NEWS_TARGET` | Delivery target (WhatsApp JID, group name, or Telegram chat ID) | `120363421796203667@g.us` |
+| `FINANCE_NEWS_CHANNEL` | Delivery channel | `whatsapp` or `telegram` |
+| `SKILL_DIR` | Path to skill directory (for Lobster) | `$HOME/projects/finance-news-moltbot-skill` |
 
 ## Installation
 
-1. Clone to your Clawdbot skills directory:
-   ```bash
-   git clone https://github.com/kesslerio/finance-news-clawdbot-skill.git \
-       ~/clawd/skills/finance-news
-   ```
+### Option 1: Docker (Recommended)
 
-2. Create symlink for CLI access:
-   ```bash
-   ln -sf ~/clawd/skills/finance-news/scripts/finance-news ~/.local/bin/finance-news
-   ```
+```bash
+git clone https://github.com/kesslerio/finance-news-moltbot-skill.git
+cd finance-news-moltbot-skill
+docker build -t finance-news-briefing .
+```
 
-3. Install Python dependencies:
-   ```bash
-   cd ~/clawd/skills/finance-news
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
-   ```
+### Option 2: Native Python
 
-4. Run setup wizard:
-   ```bash
-   finance-news setup
-   ```
+```bash
+# Clone repository
+git clone https://github.com/kesslerio/finance-news-moltbot-skill.git \
+    ~/moltbot/skills/finance-news
 
-The `finance-news` CLI will auto-use `.venv` if present.
+# Create virtual environment
+cd ~/moltbot/skills/finance-news
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Create CLI symlink
+ln -sf ~/moltbot/skills/finance-news/scripts/finance-news ~/.local/bin/finance-news
+```
 
 ## Configuration
 
-The setup wizard (`finance-news setup`) lets you configure:
+Configuration is stored in `config/config.json`:
 
-- **RSS Feeds:** Enable/disable news sources
-- **Markets:** Choose which regions to track
-- **Delivery:** WhatsApp/Telegram group for briefings
-- **Language:** German or English output
+- **RSS Feeds:** Enable/disable news sources per region
+- **Markets:** Choose which indices to track
+- **Delivery:** WhatsApp/Telegram settings
+- **Language:** German (`de`) or English (`en`) output
 - **Schedule:** Cron times for morning/evening briefings
+- **LLM:** Model order preference for headlines, summaries, translations
 
-Configuration is stored in `config/config.json`. If it is missing, the CLI will fall back to
-`config/sources.json` (legacy). Prefer updating `config/config.json`.
+Run the setup wizard for interactive configuration:
+
+```bash
+finance-news setup
+```
+
+## Lobster Workflow
+
+The skill includes a Lobster workflow (`workflows/briefing.yaml`) that:
+
+1. **Generates** briefing via Docker
+2. **Translates** portfolio headlines (German only, via moltbot)
+3. **Halts** for approval (shows preview)
+4. **Sends** macro briefing to channel
+5. **Sends** portfolio briefing to channel
+
+### Workflow Arguments
+
+| Arg | Default | Description |
+|-----|---------|-------------|
+| `time` | `morning` | Briefing type: `morning` or `evening` |
+| `lang` | `de` | Language: `en` or `de` |
+| `channel` | env var | `whatsapp` or `telegram` |
+| `target` | env var | Group JID/name or chat ID |
+| `fast` | `false` | Use fast mode (shorter timeouts) |
 
 ## Portfolio
 
-Manage your stock watchlist:
+Manage your stock watchlist in `config/portfolio.csv`:
 
 ```bash
 finance-news portfolio-list              # View portfolio
@@ -85,30 +130,26 @@ finance-news portfolio-remove TSLA       # Remove stock
 finance-news portfolio-import stocks.csv # Import from CSV
 ```
 
-## Cron Jobs
-
-The skill sets up automated briefings:
-
-- **Morning:** 6:30 AM PT (US market open)
-- **Evening:** 1:00 PM PT (US market close)
-
-Briefings are sent to your configured WhatsApp group in German.
+Portfolio briefings show:
+- Top gainers and losers from your holdings
+- Relevant news articles with translations
+- Shortened hyperlinks for easy access
 
 ## Dependencies
 
 - Python 3.10+
-- feedparser (`pip install -r requirements.txt`)
-- [Gemini CLI](https://github.com/google/generative-ai-cli) for AI summaries
-- OpenBB (optional, for enhanced market data)
-- Clawdbot for WhatsApp delivery
+- Docker (recommended)
+- moltbot CLI (for message delivery and LLM)
+- Lobster (for workflow automation)
+
+### Optional
+
+- OpenBB (`openbb-quote`) for enhanced market data
 
 ## License
 
 Apache 2.0 - See [LICENSE](LICENSE) file for details.
 
-
 ## Related Skills
 
-- **[task-tracker](https://github.com/kesslerio/task-tracker-clawdbot-skill):** Personal task management with daily standups, weekly reviews, and Telegram slash commands
-- **oura-analytics:** Sleep and health tracking with automated reports
-- **openbb:** Equity data and stock analysis (used by this skill for market quotes)
+- **[task-tracker](https://github.com/kesslerio/task-tracker-moltbot-skill):** Personal task management with daily standups
