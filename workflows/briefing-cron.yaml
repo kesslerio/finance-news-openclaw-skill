@@ -1,13 +1,13 @@
-# Finance Briefing Workflow for Lobster
-# Usage: lobster "workflows.run --file workflows/briefing.yaml --args-json '{\"time\":\"morning\",\"lang\":\"de\"}'"
+# Finance Briefing Workflow for Cron (No Approval Gate)
+# Usage: lobster run --file workflows/briefing-cron.yaml --args-json '{"time":"morning","lang":"de"}'
 #
 # This workflow:
 # 1. Generates a market briefing via Docker
-# 2. Halts for approval before sending
-# 3. Sends to messaging channel after approval
+# 2. Translates portfolio headlines (German)
+# 3. Sends directly to messaging channel (no approval)
 
-name: finance.briefing
-description: Generate market briefing and send to WhatsApp/Telegram with approval gate
+name: finance.briefing.cron
+description: Generate market briefing and send to WhatsApp/Telegram (auto-approve for cron)
 
 args:
   time:
@@ -58,21 +58,7 @@ steps:
     stdin: $generate.stdout
     description: Translate portfolio headlines via moltbot
 
-  # Approval gate - workflow halts here until user approves
-  - id: approve
-    approval: required
-    command: |
-      OUTFILE=$(cat)
-      echo "Briefing saved to: $OUTFILE"
-      echo "Target: ${target}"
-      echo "Channel: ${channel}"
-      cat "$OUTFILE" | jq -r '.macro_message' | head -20
-      echo "..."
-      echo "Review above. Approve to send."
-    stdin: $translate.stdout
-    description: Approval gate before message delivery
-
-  # Send macro briefing (market overview)
+  # Send macro briefing (market overview) - NO APPROVAL GATE
   - id: send_macro
     command: |
       OUTFILE=$(cat)
