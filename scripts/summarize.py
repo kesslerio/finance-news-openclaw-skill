@@ -484,7 +484,7 @@ def summarize_with_claude(
     style: str = "briefing",
     deadline: float | None = None,
 ) -> str:
-    """Generate AI summary using Claude via Clawdbot agent."""
+    """Generate AI summary using Claude via Moltbot agent."""
     prompt = f"""{STYLE_PROMPTS.get(style, STYLE_PROMPTS['briefing'])}
 
 {LANG_PROMPTS.get(language, LANG_PROMPTS['de'])}

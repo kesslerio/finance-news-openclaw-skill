@@ -167,7 +167,7 @@ def setup_schedule(sources: dict):
 
 
 def setup_cron_jobs(sources: dict):
-    """Set up Clawdbot cron jobs based on configuration."""
+    """Set up Moltbot cron jobs based on configuration."""
     print("\n📅 Setting up cron jobs...\n")
     
     schedule = sources.get('schedule', {})

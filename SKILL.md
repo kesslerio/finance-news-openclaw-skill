@@ -147,7 +147,7 @@ Location: `~/clawd/skills/finance-news/config/config.json` (legacy fallback: `co
 
 ## Cron Jobs
 
-### Setup via Clawdbot
+### Setup via Moltbot
 
 ```bash
 # Add morning briefing cron job
@@ -203,7 +203,7 @@ Momentum. Fed-Kommentare könnten Volatilität auslösen.
 openbb-quote AAPL && finance-news news AAPL
 ```
 
-### With Clawdbot Agent
+### With Moltbot Agent
 The agent will automatically use this skill when asked about:
 - "What's the market doing?"
 - "News for my portfolio"
@@ -260,7 +260,7 @@ skills/finance-news/
 - `feedparser` (`pip install feedparser`)
 - Gemini CLI (`brew install gemini-cli`)
 - OpenBB (existing `openbb-quote` wrapper)
-- Clawdbot message tool (for WhatsApp delivery)
+- Moltbot message tool (for WhatsApp delivery)
 
 ## Troubleshooting
 
