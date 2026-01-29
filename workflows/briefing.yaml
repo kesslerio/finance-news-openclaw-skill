@@ -52,7 +52,7 @@ steps:
       OUTFILE=$(echo "$OUTFILE" | tr -d '\n')
       SKILL_DIR="${SKILL_DIR:-$HOME/projects/finance-news-moltbot-skill}"
       if [ "${lang}" = "de" ]; then
-        python3 "$SKILL_DIR/scripts/translate_portfolio.py" "$OUTFILE" --lang de 2>&1 || true
+        python3 "$SKILL_DIR/scripts/translate_portfolio.py" "$OUTFILE" --lang de || true
       fi
       echo "$OUTFILE"
     stdin: $generate.stdout
