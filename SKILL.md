@@ -1,6 +1,6 @@
 ---
 name: finance-news
-description: "Market news briefings with AI summaries. Features: Portfolio tracking, multi-market coverage (US/Europe/Japan), cron-scheduled WhatsApp briefings, WSJ/Barron's/CNBC/Yahoo aggregation, English/German language support."
+description: "Market news briefings with AI summaries. Use when asked about stock news, market updates, portfolio performance, morning/evening briefings, financial headlines, or price alerts. Supports US/Europe/Japan markets, WhatsApp delivery, and English/German output."
 ---
 
 # Finance News Skill
@@ -210,23 +210,47 @@ The agent will automatically use this skill when asked about:
 - "Generate morning briefing"
 - "What's happening with AAPL?"
 
+### With Lobster (Workflow Engine)
+
+Run briefings via [Lobster](https://github.com/moltbot/lobster) for approval gates and resumability:
+
+```bash
+# Run with approval before WhatsApp send
+lobster "workflows.run --file workflows/briefing.yaml"
+
+# With custom args
+lobster "workflows.run --file workflows/briefing.yaml --args-json '{\"time\":\"evening\",\"lang\":\"en\"}'"
+```
+
+See `workflows/README.md` for full documentation.
+
 ## Files
 
 ```
 skills/finance-news/
 ├── SKILL.md              # This documentation
+├── Dockerfile            # NixOS-compatible container
 ├── config/
 │   ├── portfolio.csv     # Your watchlist
-│   └── config.json       # RSS/API configuration
+│   ├── config.json       # RSS/API/language configuration
+│   ├── alerts.json       # Price target alerts
+│   └── manual_earnings.json  # Earnings calendar overrides
 ├── scripts/
 │   ├── finance-news      # Main CLI
 │   ├── briefing.py       # Briefing generator
 │   ├── fetch_news.py     # News aggregator
 │   ├── portfolio.py      # Portfolio CRUD
-│   └── summarize.py      # Gemini summarization
+│   ├── summarize.py      # AI summarization
+│   ├── alerts.py         # Price alert management
+│   ├── earnings.py       # Earnings calendar
+│   ├── ranking.py        # Headline ranking
+│   └── stocks.py         # Stock management
+├── workflows/
+│   ├── briefing.yaml     # Lobster workflow with approval gate
+│   └── README.md         # Workflow documentation
 ├── cron/
-│   ├── morning.sh        # Morning cron script
-│   └── evening.sh        # Evening cron script
+│   ├── morning.sh        # Morning cron (Docker-based)
+│   └── evening.sh        # Evening cron (Docker-based)
 └── cache/                # 15-minute news cache
 ```
 

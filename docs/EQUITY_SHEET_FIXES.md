@@ -1,5 +1,13 @@
 # Equity Sheet Fixes
 
+## Contents
+- [NRR Column Fix](#nrr-column-column-q---range-values-fix)
+- [Conversion Rules](#conversion-rules)
+- [Fix Procedure](#fix-procedure)
+- [Impact](#impact)
+- [Related Columns](#related-columns)
+- [Prevention](#prevention)
+
 ## NRR Column (Column Q) - Range Values Fix
 
 **Problem:** Values like "115-120%", "125%+", "N/A" in NRR column cause #VALUE! errors in MSS Score formula (columns Y/Z).

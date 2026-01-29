@@ -1,5 +1,13 @@
 # Premium Source Authentication
 
+## Contents
+- [Overview](#overview)
+- [Option 1: Keep It Simple (Recommended)](#option-1-keep-it-simple-recommended)
+- [Option 2: Use Premium Sources (Advanced)](#option-2-use-premium-sources-advanced)
+- [Troubleshooting](#troubleshooting)
+- [Alternative: Use APIs Instead](#alternative-use-apis-instead)
+- [Recommendation](#recommendation)
+
 ## Overview
 
 WSJ and Barron's are premium financial news sources that require subscriptions. This guide explains how to authenticate and use premium sources with the finance-news skill.
