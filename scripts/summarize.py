@@ -728,8 +728,14 @@ def format_portfolio_news(portfolio_data: dict) -> str:
     return '\n'.join(lines)
 
 
-def classify_sentiment(market_data: dict, portfolio_data: dict | None = None) -> str:
+def classify_sentiment(market_data: dict, portfolio_data: dict | None = None) -> dict:
+    """Classify market sentiment and return details for explanation.
+
+    Returns dict with: sentiment, avg_change, count, top_gainers, top_losers
+    """
     changes = []
+    stock_changes = []  # Track individual stocks for explanation
+
     # Collect market indices changes
     for region in market_data.get("markets", {}).values():
         for idx in region.get("indices", {}).values():
@@ -746,21 +752,38 @@ def classify_sentiment(market_data: dict, portfolio_data: dict | None = None) ->
 
     # Include portfolio price changes as fallback/supplement
     if portfolio_data and "stocks" in portfolio_data:
-        for stock_data in portfolio_data["stocks"].values():
+        for symbol, stock_data in portfolio_data["stocks"].items():
             quote = stock_data.get("quote", {})
             change = quote.get("change_percent")
             if isinstance(change, (int, float)):
                 changes.append(change)
+                stock_changes.append({"symbol": symbol, "change": change})
 
     if not changes:
-        return "No data available"
+        return {"sentiment": "No data available", "avg_change": 0, "count": 0, "top_gainers": [], "top_losers": []}
 
     avg = sum(changes) / len(changes)
+
+    # Sort stocks for top movers
+    stock_changes.sort(key=lambda x: x["change"], reverse=True)
+    top_gainers = [s for s in stock_changes if s["change"] > 0][:3]
+    top_losers = [s for s in stock_changes if s["change"] < 0][-3:]  # Last 3 (most negative)
+    top_losers.reverse()  # Most negative first
+
     if avg >= 0.5:
-        return "Bullish"
-    if avg <= -0.5:
-        return "Bearish"
-    return "Neutral"
+        sentiment = "Bullish"
+    elif avg <= -0.5:
+        sentiment = "Bearish"
+    else:
+        sentiment = "Neutral"
+
+    return {
+        "sentiment": sentiment,
+        "avg_change": avg,
+        "count": len(changes),
+        "top_gainers": top_gainers,
+        "top_losers": top_losers,
+    }
 
 
 def build_briefing_summary(
@@ -771,7 +794,11 @@ def build_briefing_summary(
     labels: dict,
     language: str,
 ) -> str:
-    sentiment = classify_sentiment(market_data, portfolio_data)
+    sentiment_data = classify_sentiment(market_data, portfolio_data)
+    sentiment = sentiment_data["sentiment"]
+    avg_change = sentiment_data["avg_change"]
+    top_gainers = sentiment_data["top_gainers"]
+    top_losers = sentiment_data["top_losers"]
     headlines = top_headlines or []
 
     heading_briefing = labels.get("heading_briefing", "Market Briefing")
@@ -789,7 +816,31 @@ def build_briefing_summary(
     sentiment_map = labels.get("sentiment_map", {})
     sentiment_display = sentiment_map.get(sentiment, sentiment)
 
+    # Build sentiment explanation
+    sentiment_explanation = ""
+    if sentiment in ("Bullish", "Bearish", "Neutral") and (top_gainers or top_losers):
+        if language == "de":
+            if sentiment == "Bearish" and top_losers:
+                losers_str = ", ".join(f"{s['symbol']} {s['change']:+.1f}%" for s in top_losers[:3])
+                sentiment_explanation = f"Durchschnitt {avg_change:+.1f}% — Verlierer: {losers_str}"
+            elif sentiment == "Bullish" and top_gainers:
+                gainers_str = ", ".join(f"{s['symbol']} {s['change']:+.1f}%" for s in top_gainers[:3])
+                sentiment_explanation = f"Durchschnitt {avg_change:+.1f}% — Gewinner: {gainers_str}"
+            else:
+                sentiment_explanation = f"Durchschnitt {avg_change:+.1f}%"
+        else:
+            if sentiment == "Bearish" and top_losers:
+                losers_str = ", ".join(f"{s['symbol']} {s['change']:+.1f}%" for s in top_losers[:3])
+                sentiment_explanation = f"Avg {avg_change:+.1f}% — Losers: {losers_str}"
+            elif sentiment == "Bullish" and top_gainers:
+                gainers_str = ", ".join(f"{s['symbol']} {s['change']:+.1f}%" for s in top_gainers[:3])
+                sentiment_explanation = f"Avg {avg_change:+.1f}% — Gainers: {gainers_str}"
+            else:
+                sentiment_explanation = f"Avg {avg_change:+.1f}%"
+
     lines = [f"## {heading_briefing}", "", f"### {heading_sentiment}: {sentiment_display}"]
+    if sentiment_explanation:
+        lines.append(sentiment_explanation)
 
     lines.append("")
     lines.append(f"### {heading_top}")
@@ -816,14 +867,27 @@ def build_briefing_summary(
 
     lines.append("")
     lines.append(f"### {heading_reco}")
+
+    # Build watchpoints with specific context
+    watchpoint_lines = []
     if sentiment == "Bullish":
-        lines.append(rec_bullish)
+        watchpoint_lines.append(rec_bullish)
+        if top_gainers and language == "de":
+            watchpoint_lines.append(f"Stärke bei: {', '.join(s['symbol'] for s in top_gainers[:3])}")
+        elif top_gainers:
+            watchpoint_lines.append(f"Strength in: {', '.join(s['symbol'] for s in top_gainers[:3])}")
     elif sentiment == "Bearish":
-        lines.append(rec_bearish)
+        watchpoint_lines.append(rec_bearish)
+        if top_losers and language == "de":
+            watchpoint_lines.append(f"Unter Druck: {', '.join(s['symbol'] for s in top_losers[:3])}")
+        elif top_losers:
+            watchpoint_lines.append(f"Under pressure: {', '.join(s['symbol'] for s in top_losers[:3])}")
     elif sentiment == "Neutral":
-        lines.append(rec_neutral)
+        watchpoint_lines.append(rec_neutral)
     else:
-        lines.append(rec_unknown)
+        watchpoint_lines.append(rec_unknown)
+
+    lines.append(" ".join(watchpoint_lines))
 
     return "\n".join(lines)
 
@@ -1115,7 +1179,7 @@ def generate_briefing(args):
             # Format top movers for Message 2
             portfolio_header = labels.get("heading_portfolio_movers", "Portfolio Movers")
             lines = [f"📊 **{portfolio_header}** (Top {len(portfolio_data['stocks'])} of {total_stocks})"]
-            
+
             # Sort stocks by magnitude of move for display
             stocks = []
             for sym, data in portfolio_data['stocks'].items():
@@ -1123,20 +1187,52 @@ def generate_briefing(args):
                 change = quote.get('change_percent', 0)
                 price = quote.get('price')
                 stocks.append({'symbol': sym, 'change': change, 'price': price, 'articles': data.get('articles', [])})
-            
-            # Sort: Gainers first, then Losers? Or just absolute magnitude?
-            # Issue says: Top 10 movers (5 gainers, 5 losers)
-            # We assume fetch_news passed us the right stocks. We just display them.
-            # Let's sort by change desc
+
             stocks.sort(key=lambda x: x['change'], reverse=True)
-            
+
+            # Collect all article titles for translation (if German)
+            all_articles = []
+            for s in stocks:
+                for art in s['articles'][:2]:
+                    all_articles.append(art)
+
+            # Translate headlines if German
+            title_translations = {}
+            if language == "de" and all_articles:
+                titles_to_translate = [art.get('title', '') for art in all_articles]
+                translation_model_order = config.get("llm", {}).get("translation_model_order", ["gemini", "minimax", "claude"])
+                translated, _ = translate_headlines(titles_to_translate, deadline=None, model_order=translation_model_order)
+                for orig, trans in zip(titles_to_translate, translated):
+                    title_translations[orig] = trans
+
+            # Format with references
+            ref_idx = 1
+            portfolio_sources = []
+
             for s in stocks:
                 emoji_p = '📈' if s['change'] >= 0 else '📉'
                 price_str = f"${s['price']:.2f}" if s['price'] else 'N/A'
                 lines.append(f"\n**{s['symbol']}** {emoji_p} {price_str} ({s['change']:+.2f}%)")
-                for art in s['articles'][:2]: # Limit to 2 articles per stock in briefing
-                    lines.append(f"• {art['title']}")
-            
+                for art in s['articles'][:2]:
+                    art_title = art.get('title', '')
+                    # Use translated title if available
+                    display_title = title_translations.get(art_title, art_title)
+                    link = art.get('link', '')
+                    if link:
+                        lines.append(f"• {display_title} [{ref_idx}]")
+                        portfolio_sources.append({'idx': ref_idx, 'link': link})
+                        ref_idx += 1
+                    else:
+                        lines.append(f"• {display_title}")
+
+            # Add sources section
+            if portfolio_sources:
+                sources_header = labels.get("sources_header", "Sources")
+                lines.append(f"\n## {sources_header}\n")
+                for src in portfolio_sources:
+                    short_link = shorten_url(src['link'])
+                    lines.append(f"[{src['idx']}] {short_link}")
+
             portfolio_output = "\n".join(lines)
             
             # If not JSON output, we might want to print a delimiter
