@@ -27,51 +27,72 @@ args:
     description: "Use fast mode: true or false"
 
 steps:
-  # Generate briefing - outputs JSON with macro_message and portfolio_message
+  # Generate briefing and save to temp file
   - id: generate
     command: |
       SKILL_DIR="${SKILL_DIR:-$HOME/projects/finance-news-clawdbot-skill}"
       FAST_FLAG=""
       if [ "${fast}" = "true" ]; then FAST_FLAG="--fast"; fi
+      OUTFILE="/tmp/lobster-briefing-$$.json"
       docker run --rm \
         -v "$SKILL_DIR/config:/app/config:ro" \
         finance-news-briefing python3 scripts/briefing.py \
           --time "${time}" \
           --lang "${lang}" \
           --json \
-          $FAST_FLAG
+          $FAST_FLAG > "$OUTFILE"
+      # Output the file path for subsequent steps
+      echo "$OUTFILE"
     description: Generate briefing via Docker
 
   # Approval gate - workflow halts here until user approves
   - id: approve
     approval: required
-    command: echo "Review the briefing output above. Approve to send via ${channel} to ${target}."
+    command: |
+      OUTFILE=$(cat)
+      echo "Briefing saved to: $OUTFILE"
+      echo "Target: ${FINANCE_NEWS_TARGET:-$target}"
+      echo "Channel: ${FINANCE_NEWS_CHANNEL:-$channel}"
+      cat "$OUTFILE" | jq -r '.macro_message' | head -20
+      echo "..."
+      echo "Review above. Approve to send."
+    stdin: $generate.stdout
     description: Approval gate before message delivery
 
   # Send macro briefing (market overview)
   - id: send_macro
     command: |
-      MSG=$(echo '${generate.stdout}' | jq -r '.macro_message // empty')
+      OUTFILE=$(cat)
+      OUTFILE=$(echo "$OUTFILE" | tr -d '\n')
+      TARGET="${FINANCE_NEWS_TARGET}"
+      CHANNEL="${FINANCE_NEWS_CHANNEL:-whatsapp}"
+      MSG=$(jq -r '.macro_message // empty' "$OUTFILE")
       if [ -n "$MSG" ]; then
         clawdbot message send \
-          --channel "${channel}" \
-          --target "${target}" \
+          --channel "$CHANNEL" \
+          --target "$TARGET" \
           --message "$MSG"
       else
         echo "No macro message to send"
       fi
+    stdin: $generate.stdout
     description: Send macro briefing
 
   # Send portfolio briefing (stock movers)
   - id: send_portfolio
     command: |
-      MSG=$(echo '${generate.stdout}' | jq -r '.portfolio_message // empty')
+      OUTFILE=$(cat)
+      OUTFILE=$(echo "$OUTFILE" | tr -d '\n')
+      TARGET="${FINANCE_NEWS_TARGET}"
+      CHANNEL="${FINANCE_NEWS_CHANNEL:-whatsapp}"
+      MSG=$(jq -r '.portfolio_message // empty' "$OUTFILE")
       if [ -n "$MSG" ]; then
         clawdbot message send \
-          --channel "${channel}" \
-          --target "${target}" \
+          --channel "$CHANNEL" \
+          --target "$TARGET" \
           --message "$MSG"
       else
         echo "No portfolio message to send"
       fi
+    stdin: $generate.stdout
     description: Send portfolio briefing
