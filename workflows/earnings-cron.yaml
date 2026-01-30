@@ -22,7 +22,7 @@ steps:
   # Check earnings calendar for today and this week
   - id: check_earnings
     command: |
-      SKILL_DIR="${SKILL_DIR:-$HOME/projects/finance-news-openclaw-skill}"
+      SKILL_DIR="${SKILL_DIR:-$HOME/projects/skills/personal/finance-news}"
       python3 "$SKILL_DIR/scripts/earnings.py" check --lang "${lang}"
     description: Get today's earnings calendar
 

@@ -22,7 +22,7 @@ steps:
   # Check alerts against current prices
   - id: check_alerts
     command: |
-      SKILL_DIR="${SKILL_DIR:-$HOME/projects/finance-news-openclaw-skill}"
+      SKILL_DIR="${SKILL_DIR:-$HOME/projects/skills/personal/finance-news}"
       python3 "$SKILL_DIR/scripts/alerts.py" check --lang "${lang}"
     description: Check price alerts against current prices
 

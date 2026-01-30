@@ -22,7 +22,7 @@ steps:
   # Check earnings calendar for upcoming week
   - id: check_earnings
     command: |
-      SKILL_DIR="${SKILL_DIR:-$HOME/projects/finance-news-openclaw-skill}"
+      SKILL_DIR="${SKILL_DIR:-$HOME/projects/skills/personal/finance-news}"
       python3 "$SKILL_DIR/scripts/earnings.py" check --week --lang "${lang}"
     description: Get upcoming week's earnings calendar
 
