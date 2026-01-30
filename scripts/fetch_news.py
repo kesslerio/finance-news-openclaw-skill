@@ -338,20 +338,17 @@ def fetch_market_data(
                 # Get latest row with valid data (Open/Close)
                 # We need 'Close' and 'Prev Close'
                 
-                # Handle single vs multi-symbol DF structure difference
-                if len(symbols) == 1:
-                     s_df = df
+                # Handle yfinance MultiIndex columns (yfinance >= 0.2.0)
+                # yfinance now uses MultiIndex (Price, Ticker) even for single symbols
+                if isinstance(df.columns, pd.MultiIndex):
+                    try:
+                        s_df = df.xs(symbol, level=1, axis=1, drop_level=True)
+                    except (KeyError, AttributeError):
+                        # Symbol not found in download results
+                        continue
                 else:
-                     # Access cross-section safely
-                     try:
-                         # yfinance 0.2+ returns columns like ('Close', 'AAPL')
-                         # We can assume it's multi-index if len > 1 usually
-                         # But let's use the xs method if available or direct column access
-                         s_df = df.xs(symbol, level=1, axis=1, drop_level=True)
-                     except (KeyError, AttributeError):
-                         # Maybe it wasn't multi-index (only 1 symbol succeeded?)
-                         # Fallback to Ticker
-                         continue
+                    # Flat columns (older yfinance or single-symbol fallback)
+                    s_df = df
 
                 # Get last valid price
                 if s_df.empty:
