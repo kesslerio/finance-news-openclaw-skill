@@ -17,7 +17,7 @@ echo ""
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 PYTHON_VERSION=$("$PYTHON_BIN" --version 2>&1)
 echo "Using: $PYTHON_VERSION"
-echo "Path:  $(which "$PYTHON_BIN")"
+echo "Path:  $(command -v "$PYTHON_BIN" 2>/dev/null || echo "$PYTHON_BIN")"
 echo ""
 
 # Remove existing venv if --force flag
