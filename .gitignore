@@ -27,3 +27,5 @@ config/translations.json
 
 # Personal data
 config/stocks.json
+config/alerts.json
+config/moltbot-cron-backup-*.json
