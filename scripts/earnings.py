@@ -318,9 +318,9 @@ def check_earnings(args):
     portfolio = load_portfolio()
     if not portfolio:
         return
-    
+
     cache = load_earnings_cache()
-    
+
     # Auto-refresh if cache is stale
     if not cache.get("last_updated"):
         cache = refresh_earnings(portfolio, force=False)
@@ -331,17 +331,29 @@ def check_earnings(args):
                 cache = refresh_earnings(portfolio, force=False)
         except Exception:
             cache = refresh_earnings(portfolio, force=False)
-    
+
     earnings = cache.get("earnings", {})
     if not earnings:
         return
-    
+
     today = datetime.now().date()
-    week_end = today + timedelta(days=7)
-    
+    week_only = getattr(args, 'week', False)
+
+    # For weekly mode (Sunday cron), show Mon-Fri of upcoming week
+    # Calculation: weekday() returns 0=Mon, 6=Sun. (7 - weekday) % 7 gives days until next Monday.
+    # Special case: if today is Monday (result=0), we want next Monday (7 days), not today.
+    if week_only:
+        days_until_monday = (7 - today.weekday()) % 7
+        if days_until_monday == 0 and today.weekday() != 0:
+            days_until_monday = 7
+        week_start = today + timedelta(days=days_until_monday)
+        week_end = week_start + timedelta(days=4)  # Mon-Fri
+    else:
+        week_end = today + timedelta(days=7)
+
     today_list = []
     week_list = []
-    
+
     for ticker, data in earnings.items():
         if not data.get("date"):
             continue
@@ -350,7 +362,7 @@ def check_earnings(args):
             stock = next((s for s in portfolio if s["symbol"] == ticker), None)
             name = stock["name"] if stock else ticker
             category = stock.get("category", "") if stock else ""
-            
+
             entry = {
                 "ticker": ticker,
                 "name": name,
@@ -359,40 +371,63 @@ def check_earnings(args):
                 "eps_estimate": data.get("eps_estimate"),
                 "category": category,
             }
-            
-            if ed == today:
-                today_list.append(entry)
-            elif today < ed <= week_end:
-                week_list.append(entry)
+
+            if week_only:
+                # Weekly mode: only show week range
+                if week_start <= ed <= week_end:
+                    week_list.append(entry)
+            else:
+                # Daily mode: today + this week
+                if ed == today:
+                    today_list.append(entry)
+                elif today < ed <= week_end:
+                    week_list.append(entry)
         except ValueError:
             continue
     
     # Handle JSON output
     if getattr(args, 'json', False):
-        result = {
-            "today": [
-                {
-                    "ticker": e["ticker"],
-                    "name": e["name"],
-                    "date": e["date"].isoformat(),
-                    "time": e["time"],
-                    "eps_estimate": e.get("eps_estimate"),
-                    "category": e.get("category", ""),
-                }
-                for e in sorted(today_list, key=lambda x: x.get("time", "zzz"))
-            ],
-            "this_week": [
-                {
-                    "ticker": e["ticker"],
-                    "name": e["name"],
-                    "date": e["date"].isoformat(),
-                    "time": e["time"],
-                    "eps_estimate": e.get("eps_estimate"),
-                    "category": e.get("category", ""),
-                }
-                for e in sorted(week_list, key=lambda x: x["date"])
-            ],
-        }
+        if week_only:
+            result = {
+                "week_start": week_start.isoformat(),
+                "week_end": week_end.isoformat(),
+                "earnings": [
+                    {
+                        "ticker": e["ticker"],
+                        "name": e["name"],
+                        "date": e["date"].isoformat(),
+                        "time": e["time"],
+                        "eps_estimate": e.get("eps_estimate"),
+                        "category": e.get("category", ""),
+                    }
+                    for e in sorted(week_list, key=lambda x: x["date"])
+                ],
+            }
+        else:
+            result = {
+                "today": [
+                    {
+                        "ticker": e["ticker"],
+                        "name": e["name"],
+                        "date": e["date"].isoformat(),
+                        "time": e["time"],
+                        "eps_estimate": e.get("eps_estimate"),
+                        "category": e.get("category", ""),
+                    }
+                    for e in sorted(today_list, key=lambda x: x.get("time", "zzz"))
+                ],
+                "this_week": [
+                    {
+                        "ticker": e["ticker"],
+                        "name": e["name"],
+                        "date": e["date"].isoformat(),
+                        "time": e["time"],
+                        "eps_estimate": e.get("eps_estimate"),
+                        "category": e.get("category", ""),
+                    }
+                    for e in sorted(week_list, key=lambda x: x["date"])
+                ],
+            }
         print(json.dumps(result, indent=2))
         return
 
@@ -402,23 +437,27 @@ def check_earnings(args):
         labels = {
             "today": "EARNINGS HEUTE",
             "week": "EARNINGS DIESE WOCHE",
+            "week_preview": "EARNINGS NÄCHSTE WOCHE",
             "pre": "vor Börseneröffnung",
             "post": "nach Börsenschluss",
             "pre_short": "vor",
             "post_short": "nach",
             "est": "Erw",
             "none": "Keine Earnings diese Woche",
+            "none_week": "Keine Earnings nächste Woche",
         }
     else:
         labels = {
             "today": "EARNINGS TODAY",
             "week": "EARNINGS THIS WEEK",
+            "week_preview": "EARNINGS NEXT WEEK",
             "pre": "pre-market",
             "post": "after-close",
             "pre_short": "pre",
             "post_short": "post",
             "est": "Est",
             "none": "No earnings this week",
+            "none_week": "No earnings next week",
         }
 
     # Date header
@@ -427,7 +466,8 @@ def check_earnings(args):
     # Output for briefing
     output = []
 
-    if today_list:
+    # Daily mode: show today's earnings
+    if not week_only and today_list:
         output.append(f"📅 {labels['today']} — {date_str}\n")
         for e in sorted(today_list, key=lambda x: x.get("time", "zzz")):
             time_str = f" ({labels['pre']})" if e["time"] == "bmo" else f" ({labels['post']})" if e["time"] == "amc" else ""
@@ -436,7 +476,14 @@ def check_earnings(args):
         output.append("")
 
     if week_list:
-        output.append(f"📅 {labels['week']}\n")
+        # Use different header for weekly preview mode
+        week_label = labels['week_preview'] if week_only else labels['week']
+        if week_only:
+            # Show date range for weekly preview
+            week_range = f"{week_start.strftime('%b %d')} - {week_end.strftime('%b %d')}"
+            output.append(f"📅 {week_label} ({week_range})\n")
+        else:
+            output.append(f"📅 {week_label}\n")
         for e in sorted(week_list, key=lambda x: x["date"]):
             day_name = e["date"].strftime("%a %d.%m")
             time_str = f" ({labels['pre_short']})" if e["time"] == "bmo" else f" ({labels['post_short']})" if e["time"] == "amc" else ""
@@ -447,7 +494,8 @@ def check_earnings(args):
         print("\n".join(output))
     else:
         if args.verbose:
-            print(f"📅 {labels['none']}")
+            no_earnings_label = labels['none_week'] if week_only else labels['none']
+            print(f"📅 {no_earnings_label}")
 
 
 def get_briefing_section() -> str:
@@ -546,6 +594,7 @@ def main():
     check_parser.add_argument("--verbose", "-v", action="store_true")
     check_parser.add_argument("--json", action="store_true", help="JSON output")
     check_parser.add_argument("--lang", default="en", help="Output language (en, de)")
+    check_parser.add_argument("--week", action="store_true", help="Show full week preview (for weekly cron)")
     check_parser.set_defaults(func=check_earnings)
     
     # refresh command
