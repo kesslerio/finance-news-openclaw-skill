@@ -360,8 +360,13 @@ def _fetch_via_yfinance(
                         s_df = df.xs(symbol, level=1, axis=1, drop_level=True)
                     except (KeyError, AttributeError):
                         continue
-                else:
+                elif len(symbols) == 1:
+                    # Flat columns only valid for single-symbol requests
                     s_df = df
+                else:
+                    # Multi-symbol request but flat columns (only one ticker returned data)
+                    # Skip to avoid misattributing prices to wrong symbols
+                    continue
 
                 if s_df.empty:
                     continue

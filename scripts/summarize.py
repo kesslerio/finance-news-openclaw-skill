@@ -1069,7 +1069,7 @@ def generate_briefing(args):
     try:
         default_deadline = int(env_deadline) if env_deadline else 300
     except ValueError:
-        print("⚠️ Invalid FINANCE_NEWS_DEADLINE_SEC; using default 300s", file=sys.stderr)
+        print("⚠️ Invalid FINANCE_NEWS_DEADLINE_SEC; using default 600s", file=sys.stderr)
         default_deadline = 600
     deadline_sec = args.deadline if args.deadline is not None else default_deadline
     deadline = compute_deadline(deadline_sec)
