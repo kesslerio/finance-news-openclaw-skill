@@ -1,0 +1,33 @@
+{
+  "_meta": {
+    "version": 1,
+    "updated_at": "2026-01-01T00:00:00.000000",
+    "supported_currencies": ["USD", "EUR", "JPY", "SGD", "MXN"]
+  },
+  "alerts": [
+    {
+      "ticker": "AAPL",
+      "target_price": 200.0,
+      "currency": "USD",
+      "note": "Buy zone after correction",
+      "set_by": "User",
+      "set_date": "2026-01-01",
+      "status": "active",
+      "snooze_until": null,
+      "triggered_count": 0,
+      "last_triggered": null
+    },
+    {
+      "ticker": "NVDA",
+      "target_price": 120.0,
+      "currency": "USD",
+      "note": "Strong support level",
+      "set_by": "User",
+      "set_date": "2026-01-01",
+      "status": "active",
+      "snooze_until": null,
+      "triggered_count": 0,
+      "last_triggered": null
+    }
+  ]
+}
