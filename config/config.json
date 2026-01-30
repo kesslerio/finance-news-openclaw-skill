@@ -96,6 +96,15 @@
     "en": 20
   },
   "portfolio_deadline_sec": 360,
+  "portfolio": {
+    "briefing_limit": 10,
+    "prioritization_enabled": true,
+    "prioritization_weights": {
+      "type": 0.40,
+      "volatility": 0.35,
+      "news_volume": 0.25
+    }
+  },
   "markets": {
     "us": {
       "name": "US Markets",

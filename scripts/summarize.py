@@ -44,6 +44,42 @@ STOPWORDS = {
 
 SUPPORTED_MODELS = {"gemini", "minimax", "claude"}
 
+# Portfolio prioritization weights
+PORTFOLIO_PRIORITY_WEIGHTS = {
+    "type": 0.40,       # Holdings > Watchlist
+    "volatility": 0.35, # Large price moves
+    "news_volume": 0.25 # More articles = more newsworthy
+}
+
+
+def score_portfolio_stock(symbol: str, stock_data: dict) -> float:
+    """Score a portfolio stock for display priority.
+
+    Higher scores = more important to show. Factors:
+    - Type: Holdings prioritized over Watchlist (40%)
+    - Volatility: Large price moves are newsworthy (35%)
+    - News volume: More articles = more activity (25%)
+    """
+    quote = stock_data.get('quote', {})
+    articles = stock_data.get('articles', [])
+    info = stock_data.get('info', {})
+
+    # Type score: Holdings prioritized over Watchlist
+    stock_type = info.get('type', 'Watchlist') if info else 'Watchlist'
+    type_score = 1.0 if 'Hold' in stock_type else 0.5
+
+    # Volatility: Large price moves are newsworthy (normalized to 0-1, capped at 5%)
+    change_pct = abs(quote.get('change_percent', 0) or 0)
+    volatility_score = min(change_pct / 5.0, 1.0)
+
+    # News volume: More articles = more activity (normalized to 0-1, capped at 5 articles)
+    article_count = len(articles) if articles else 0
+    news_score = min(article_count / 5.0, 1.0)
+
+    # Weighted sum
+    w = PORTFOLIO_PRIORITY_WEIGHTS
+    return type_score * w["type"] + volatility_score * w["volatility"] + news_score * w["news_volume"]
+
 
 def parse_model_list(raw: str | None, default: list[str]) -> list[str]:
     if not raw:
@@ -703,12 +739,16 @@ def format_sources(headlines: list, labels: dict) -> str:
 
 
 def format_portfolio_news(portfolio_data: dict) -> str:
-    """Format portfolio news for the prompt."""
+    """Format portfolio news for the prompt.
+
+    Stocks are sorted by priority score within each type group.
+    Priority factors: position type (40%), price volatility (35%), news volume (25%).
+    """
     lines = ["## Portfolio News\n"]
-    
-    # Group by type
-    by_type = {'Holding': [], 'Watchlist': []}
-    
+
+    # Group by type with scores: {type: [(score, formatted_entry), ...]}
+    by_type: dict[str, list[tuple[float, str]]] = {'Holding': [], 'Watchlist': []}
+
     stocks = portfolio_data.get('stocks', {})
     if not stocks:
         return ""
@@ -716,33 +756,52 @@ def format_portfolio_news(portfolio_data: dict) -> str:
     for symbol, data in stocks.items():
         info = data.get('info', {})
         # info might be None if fetch_news didn't inject it properly or old version
-        if not info: info = {}
-        
+        if not info:
+            info = {}
+
         t = info.get('type', 'Watchlist')
         # Normalize
-        if 'Hold' in t: t = 'Holding'
-        else: t = 'Watchlist'
-        
+        if 'Hold' in t:
+            t = 'Holding'
+        else:
+            t = 'Watchlist'
+
         quote = data.get('quote', {})
         price = quote.get('price', 'N/A')
-        change_pct = quote.get('change_percent', 0)
-        
-        # Format string
-        entry = [f"#### {symbol} (${price}, {change_pct:+.2f}%)"]
-        for article in data.get('articles', [])[:3]:
+        change_pct = quote.get('change_percent', 0) or 0
+        articles = data.get('articles', [])
+
+        # Calculate priority score
+        score = score_portfolio_stock(symbol, data)
+
+        # Build importance indicators
+        indicators = []
+        if abs(change_pct) > 3:
+            indicators.append("large move")
+        if len(articles) >= 5:
+            indicators.append(f"{len(articles)} articles")
+        indicator_str = f" [{', '.join(indicators)}]" if indicators else ""
+
+        # Format entry
+        entry = [f"#### {symbol} (${price}, {change_pct:+.2f}%){indicator_str}"]
+        for article in articles[:3]:
             entry.append(f"- {article.get('title', '')}")
         entry.append("")
-        
-        by_type[t].append('\n'.join(entry))
-        
+
+        by_type[t].append((score, '\n'.join(entry)))
+
+    # Sort each group by score (highest first)
+    for stock_type in by_type:
+        by_type[stock_type].sort(key=lambda x: x[0], reverse=True)
+
     if by_type['Holding']:
         lines.append("### Holdings (Priority)\n")
-        lines.extend(by_type['Holding'])
-        
+        lines.extend(entry for _, entry in by_type['Holding'])
+
     if by_type['Watchlist']:
         lines.append("### Watchlist\n")
-        lines.extend(by_type['Watchlist'])
-    
+        lines.extend(entry for _, entry in by_type['Watchlist'])
+
     return '\n'.join(lines)
 
 
