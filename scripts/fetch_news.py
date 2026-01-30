@@ -275,172 +275,170 @@ def fetch_rss(url: str, limit: int = 10, timeout: int = 15, deadline: float | No
     return items
 
 
-def fetch_market_data(
+def _fetch_via_openbb(
+    openbb_bin: str,
+    symbol: str,
+    timeout: int,
+    deadline: float | None,
+    allow_price_fallback: bool,
+) -> dict | None:
+    """Fetch single symbol via openbb-quote subprocess."""
+    try:
+        effective_timeout = clamp_timeout(timeout, deadline)
+    except TimeoutError:
+        return None
+
+    try:
+        result = subprocess.run(
+            [openbb_bin, symbol],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=effective_timeout,
+            check=False
+        )
+        if result.returncode != 0:
+            return None
+
+        data = json.loads(result.stdout)
+
+        # Normalize response structure
+        if isinstance(data, dict) and "results" in data and isinstance(data["results"], list):
+            data = data["results"][0] if data["results"] else {}
+        elif isinstance(data, list):
+            data = data[0] if data else {}
+
+        if not isinstance(data, dict):
+            return None
+
+        # Price fallback: use open or prev_close if price is None
+        if allow_price_fallback and data.get("price") is None:
+            if data.get("open") is not None:
+                data["price"] = data["open"]
+            elif data.get("prev_close") is not None:
+                data["price"] = data["prev_close"]
+
+        # Calculate change_percent if missing
+        if data.get("change_percent") is None and data.get("price") and data.get("prev_close"):
+            price = data["price"]
+            prev_close = data["prev_close"]
+            if prev_close != 0:
+                data["change_percent"] = ((price - prev_close) / prev_close) * 100
+
+        data["symbol"] = symbol
+        return data
+
+    except Exception:
+        return None
+
+
+def _fetch_via_yfinance(
     symbols: list[str],
-    timeout: int = 30,
-    deadline: float | None = None,
-    allow_price_fallback: bool = False,
+    timeout: int,
+    deadline: float | None,
 ) -> dict:
-    """Fetch market data using yfinance batching (primary) with openbb fallback."""
+    """Fetch symbols via yfinance batch download (fallback)."""
     results = {}
     if not symbols:
         return results
 
-    # 1. Try yfinance batch fetch (fast)
     try:
-        # Check deadline
         if time_left(deadline) is not None and time_left(deadline) <= 0:
-             return results
-        
-        # Download batch
-        # timeout param in yf is for connection, usually fast
+            return results
+
         tickers = " ".join(symbols)
-        # period='5d' to ensure we get previous close if today is holiday/weekend
-        # actions=False to speed up
-        # threads=True for parallel
         df = yf.download(tickers, period="5d", progress=False, threads=True, ignore_tz=True)
-        
-        # Parse results
-        # yfinance returns multi-index columns if len(symbols) > 1
-        # If single symbol, it might be flat. 
-        # Check structure.
-        
-        is_multi = len(symbols) > 1
-        
-        # Extract latest data for each symbol
+
         for symbol in symbols:
             try:
-                # Get symbol data slice
-                if is_multi:
-                    try:
-                        # yfinance > 0.2.0 uses MultiIndex (Price, Ticker)
-                        # We need to extract the cross-section or just check columns
-                        # Accessing via xs or directly if columns are (Price, Ticker)
-                        # simpler: just use Ticker object if download fails, but download is faster.
-                        # Let's handle the dataframe
-                        if isinstance(df.columns, pd.MultiIndex):
-                             # This handles the case where columns are (Price, Ticker)
-                             # We want the 'Close' for this symbol
-                             # But let's check recent valid index
-                             pass
-                    except Exception:
-                        pass
-                
-                # Simplified approach: Use Tickers object for reliability if download structure is complex
-                # But download is the only way to batch efficiently.
-                
-                # Let's iterate the symbols and extracting from the df
-                # DF index is Date.
-                
                 if df.empty:
                     continue
 
-                # Get latest row with valid data (Open/Close)
-                # We need 'Close' and 'Prev Close'
-                
                 # Handle yfinance MultiIndex columns (yfinance >= 0.2.0)
-                # yfinance now uses MultiIndex (Price, Ticker) even for single symbols
                 if isinstance(df.columns, pd.MultiIndex):
                     try:
                         s_df = df.xs(symbol, level=1, axis=1, drop_level=True)
                     except (KeyError, AttributeError):
-                        # Symbol not found in download results
                         continue
                 else:
-                    # Flat columns (older yfinance or single-symbol fallback)
                     s_df = df
 
-                # Get last valid price
                 if s_df.empty:
                     continue
-                    
-                # Clean NaNs
+
                 s_df = s_df.dropna(subset=['Close'])
                 if s_df.empty:
                     continue
 
                 latest = s_df.iloc[-1]
                 price = float(latest['Close'])
-                
-                # Calculate change
+
                 prev_close = 0.0
                 change_percent = 0.0
-                
                 if len(s_df) > 1:
                     prev_row = s_df.iloc[-2]
                     prev_close = float(prev_row['Close'])
                     if prev_close > 0:
                         change_percent = ((price - prev_close) / prev_close) * 100
-                
+
                 results[symbol] = {
                     "price": price,
                     "change_percent": change_percent,
                     "prev_close": prev_close,
                     "symbol": symbol
                 }
-
-            except Exception as e:
-                # print(f"DEBUG: yf parse error for {symbol}: {e}", file=sys.stderr)
-                continue
-                
-    except Exception as e:
-        print(f"⚠️ yfinance batch failed: {e}", file=sys.stderr)
-    
-    # 2. Fallback for missing symbols using openbb (slow)
-    missing = [s for s in symbols if s not in results]
-    if missing and OPENBB_BINARY:
-        # print(f"⚠️ Falling back to openbb for: {missing}", file=sys.stderr)
-        for symbol in missing:
-             # ... existing openbb logic ...
-             # We can copy the existing logic here or recursively call a helper
-             # For now, let's keep it simple and just use the existing loop logic logic from original function
-             pass
-             
-    # Since I'm replacing the whole function, I need to include the openbb fallback logic explicitly
-    if missing and OPENBB_BINARY:
-        for symbol in missing:
-            try:
-                try:
-                    effective_timeout = clamp_timeout(timeout, deadline)
-                except TimeoutError:
-                    break
-                    
-                result = subprocess.run(
-                    [OPENBB_BINARY, symbol],
-                    capture_output=True,
-                    text=True,
-                    stdin=subprocess.DEVNULL,
-                    timeout=effective_timeout,
-                    check=False
-                )
-                if result.returncode == 0:
-                    data = json.loads(result.stdout)
-                    # Normalize (same as original)
-                    if isinstance(data, dict) and "results" in data and isinstance(data["results"], list):
-                        data = data["results"][0] if data["results"] else {}
-                    elif isinstance(data, list):
-                        data = data[0] if data else {}
-                    
-                    if allow_price_fallback and isinstance(data, dict) and data.get("price") is None:
-                        if data.get("open") is not None:
-                            data["price"] = data["open"]
-                        elif data.get("prev_close") is not None:
-                            data["price"] = data["prev_close"]
-
-                    if (
-                        isinstance(data, dict)
-                        and data.get("change_percent") is None
-                        and data.get("price")
-                        and data.get("prev_close")
-                    ):
-                        price = data["price"]
-                        prev_close = data["prev_close"]
-                        if prev_close != 0:
-                            data["change_percent"] = ((price - prev_close) / prev_close) * 100
-                            
-                    results[symbol] = data
             except Exception:
                 continue
+
+    except Exception as e:
+        print(f"⚠️ yfinance batch failed: {e}", file=sys.stderr)
+
+    return results
+
+
+def fetch_market_data(
+    symbols: list[str],
+    timeout: int = 30,
+    deadline: float | None = None,
+    allow_price_fallback: bool = False,
+) -> dict:
+    """Fetch market data using openbb-quote (primary) with yfinance fallback."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    results = {}
+    if not symbols:
+        return results
+
+    failed_symbols = []
+
+    # 1. Try openbb-quote first (primary source)
+    if OPENBB_BINARY:
+        def fetch_one(sym):
+            return sym, _fetch_via_openbb(
+                OPENBB_BINARY, sym, timeout, deadline, allow_price_fallback
+            )
+
+        # Parallel fetch with ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(8, len(symbols))) as executor:
+            futures = {executor.submit(fetch_one, s): s for s in symbols}
+            for future in as_completed(futures):
+                try:
+                    sym, data = future.result()
+                    if data:
+                        results[sym] = data
+                    else:
+                        failed_symbols.append(sym)
+                except Exception:
+                    failed_symbols.append(futures[future])
+    else:
+        # No openbb available, all symbols go to yfinance fallback
+        print("⚠️ openbb-quote not found, using yfinance fallback", file=sys.stderr)
+        failed_symbols = list(symbols)
+
+    # 2. Fallback to yfinance for any symbols that failed
+    if failed_symbols:
+        yf_results = _fetch_via_yfinance(failed_symbols, timeout, deadline)
+        results.update(yf_results)
 
     return results
 
