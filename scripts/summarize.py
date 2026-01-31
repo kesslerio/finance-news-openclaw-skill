@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -50,6 +51,45 @@ PORTFOLIO_PRIORITY_WEIGHTS = {
     "volatility": 0.35, # Large price moves
     "news_volume": 0.25 # More articles = more newsworthy
 }
+
+# Earnings-related keywords for move type classification
+EARNINGS_KEYWORDS = {
+    "earnings", "revenue", "profit", "eps", "guidance", "q1", "q2", "q3", "q4",
+    "quarterly", "results", "beat", "miss", "exceeds", "falls short", "outlook",
+    "forecast", "estimates", "sales", "income", "margin", "growth"
+}
+
+
+@dataclass
+class MoverContext:
+    """Context for a single portfolio mover."""
+    symbol: str
+    change_pct: float
+    price: float | None
+    category: str
+    matched_headline: dict | None
+    move_type: str  # "earnings" | "company_specific" | "sector" | "market_wide" | "unknown"
+    vs_index: float | None
+    vs_sector_avg: float | None
+
+
+@dataclass
+class SectorCluster:
+    """Detected sector cluster (3+ stocks moving together)."""
+    category: str
+    stocks: list[MoverContext]
+    avg_change: float
+    direction: str  # "up" | "down"
+    vs_index: float
+
+
+@dataclass
+class WatchpointsData:
+    """All data needed to build watchpoints."""
+    movers: list[MoverContext]
+    sector_clusters: list[SectorCluster]
+    index_change: float
+    market_wide: bool
 
 
 def score_portfolio_stock(symbol: str, stock_data: dict) -> float:
@@ -327,6 +367,295 @@ def title_similarity(a: str, b: str) -> float:
     if not a or not b:
         return 0.0
     return SequenceMatcher(None, a, b).ratio()
+
+
+def get_index_change(market_data: dict) -> float:
+    """Extract S&P 500 change from market data."""
+    try:
+        us_markets = market_data.get("markets", {}).get("us", {})
+        sp500 = us_markets.get("indices", {}).get("^GSPC", {})
+        return sp500.get("data", {}).get("change_percent", 0.0) or 0.0
+    except (KeyError, TypeError):
+        return 0.0
+
+
+def match_headline_to_symbol(
+    symbol: str,
+    company_name: str,
+    headlines: list[dict],
+) -> dict | None:
+    """Match a portfolio symbol/company against headlines.
+
+    Priority order:
+    1. Exact symbol match in title (e.g., "NVDA", "$TSLA")
+    2. Full company name match
+    3. Significant word match (>60% of company name words)
+
+    Returns the best matching headline or None.
+    """
+    if not headlines:
+        return None
+
+    symbol_upper = symbol.upper()
+    name_norm = normalize_title(company_name) if company_name else ""
+    name_words = set(name_norm.split()) - STOPWORDS if name_norm else set()
+
+    best_match = None
+    best_score = 0.0
+
+    for headline in headlines:
+        title = headline.get("title", "")
+        title_lower = title.lower()
+        title_norm = normalize_title(title)
+
+        score = 0.0
+
+        # Tier 1: Exact symbol match (highest priority)
+        symbol_patterns = [
+            f"${symbol_upper.lower()}",
+            f"({symbol_upper.lower()})",
+            f'"{symbol_upper.lower()}"',
+        ]
+        if any(p in title_lower for p in symbol_patterns):
+            score = 1.0
+        elif re.search(rf'\b{re.escape(symbol_upper)}\b', title, re.IGNORECASE):
+            score = 0.95
+
+        # Tier 2: Company name match
+        if score < 0.9 and name_words:
+            title_words = set(title_norm.split())
+            matched_words = len(name_words & title_words)
+            if matched_words > 0:
+                name_score = matched_words / len(name_words)
+                # Lower threshold for short names (1-2 words)
+                threshold = 0.5 if len(name_words) <= 2 else 0.6
+                if name_score >= threshold:
+                    score = max(score, 0.5 + name_score * 0.4)
+
+        if score > best_score:
+            best_score = score
+            best_match = headline
+
+    return best_match if best_score >= 0.5 else None
+
+
+def detect_sector_clusters(
+    movers: list[dict],
+    portfolio_meta: dict,
+    min_stocks: int = 3,
+    min_abs_change: float = 1.0,
+) -> list[SectorCluster]:
+    """Detect sector rotation patterns.
+
+    A cluster is defined as:
+    - 3+ stocks in the same category
+    - All moving in the same direction
+    - Average move >= min_abs_change
+    """
+    by_category: dict[str, list[dict]] = {}
+    for mover in movers:
+        sym = mover.get("symbol", "").upper()
+        category = portfolio_meta.get(sym, {}).get("category", "Other")
+        if category not in by_category:
+            by_category[category] = []
+        by_category[category].append(mover)
+
+    clusters = []
+    for category, stocks in by_category.items():
+        if len(stocks) < min_stocks:
+            continue
+
+        # Split by direction
+        gainers = [s for s in stocks if s.get("change_pct", 0) >= min_abs_change]
+        losers = [s for s in stocks if s.get("change_pct", 0) <= -min_abs_change]
+
+        for group, direction in [(gainers, "up"), (losers, "down")]:
+            if len(group) >= min_stocks:
+                avg_change = sum(s.get("change_pct", 0) for s in group) / len(group)
+                # Create MoverContext objects for stocks in cluster
+                mover_contexts = [
+                    MoverContext(
+                        symbol=s.get("symbol", ""),
+                        change_pct=s.get("change_pct", 0),
+                        price=s.get("price"),
+                        category=category,
+                        matched_headline=None,
+                        move_type="sector",
+                        vs_index=None,
+                        vs_sector_avg=None,
+                    )
+                    for s in group
+                ]
+                clusters.append(SectorCluster(
+                    category=category,
+                    stocks=mover_contexts,
+                    avg_change=avg_change,
+                    direction=direction,
+                    vs_index=0.0,
+                ))
+
+    return clusters
+
+
+def classify_move_type(
+    matched_headline: dict | None,
+    in_sector_cluster: bool,
+    change_pct: float,
+    index_change: float,
+) -> str:
+    """Classify the type of move.
+
+    Returns: "earnings" | "sector" | "market_wide" | "company_specific" | "unknown"
+    """
+    # Check for earnings news
+    if matched_headline:
+        title_lower = matched_headline.get("title", "").lower()
+        if any(kw in title_lower for kw in EARNINGS_KEYWORDS):
+            return "earnings"
+
+    # Check for sector rotation
+    if in_sector_cluster:
+        return "sector"
+
+    # Check for market-wide move
+    if abs(index_change) >= 1.5 and abs(change_pct) < abs(index_change) * 2:
+        return "market_wide"
+
+    # Has specific headline = company-specific
+    if matched_headline:
+        return "company_specific"
+
+    # Large outlier move without news
+    if abs(change_pct) >= 5:
+        return "company_specific"
+
+    return "unknown"
+
+
+def build_watchpoints_data(
+    movers: list[dict],
+    headlines: list[dict],
+    portfolio_meta: dict,
+    index_change: float,
+) -> WatchpointsData:
+    """Build enriched watchpoints data from raw movers and headlines."""
+    # Detect sector clusters first
+    sector_clusters = detect_sector_clusters(movers, portfolio_meta)
+
+    # Build set of symbols in clusters for quick lookup
+    clustered_symbols = set()
+    for cluster in sector_clusters:
+        for stock in cluster.stocks:
+            clustered_symbols.add(stock.symbol.upper())
+
+    # Calculate vs_index for each cluster
+    for cluster in sector_clusters:
+        cluster.vs_index = cluster.avg_change - index_change
+
+    # Build mover contexts
+    mover_contexts = []
+    for mover in movers:
+        symbol = mover.get("symbol", "")
+        symbol_upper = symbol.upper()
+        change_pct = mover.get("change_pct", 0)
+        category = portfolio_meta.get(symbol_upper, {}).get("category", "Other")
+        company_name = portfolio_meta.get(symbol_upper, {}).get("name", "")
+
+        # Match headline
+        matched_headline = match_headline_to_symbol(symbol, company_name, headlines)
+
+        # Check if in cluster
+        in_cluster = symbol_upper in clustered_symbols
+
+        # Classify move type
+        move_type = classify_move_type(matched_headline, in_cluster, change_pct, index_change)
+
+        # Calculate relative performance
+        vs_index = change_pct - index_change if index_change else None
+
+        mover_contexts.append(MoverContext(
+            symbol=symbol,
+            change_pct=change_pct,
+            price=mover.get("price"),
+            category=category,
+            matched_headline=matched_headline,
+            move_type=move_type,
+            vs_index=vs_index,
+            vs_sector_avg=None,
+        ))
+
+    # Sort by absolute change
+    mover_contexts.sort(key=lambda m: abs(m.change_pct), reverse=True)
+
+    # Determine if market-wide move
+    market_wide = abs(index_change) >= 1.5
+
+    return WatchpointsData(
+        movers=mover_contexts,
+        sector_clusters=sector_clusters,
+        index_change=index_change,
+        market_wide=market_wide,
+    )
+
+
+def format_watchpoints(
+    data: WatchpointsData,
+    language: str,
+    labels: dict,
+) -> str:
+    """Format watchpoints with contextual analysis."""
+    lines = []
+
+    # 1. Format sector clusters first (most insightful)
+    for cluster in data.sector_clusters:
+        emoji = "\U0001f4c8" if cluster.direction == "up" else "\U0001f4c9"
+        vs_index_str = f" (vs Index: {cluster.vs_index:+.1f}%)" if abs(cluster.vs_index) > 0.5 else ""
+
+        lines.append(f"{emoji} **{cluster.category}** ({cluster.avg_change:+.1f}%){vs_index_str}")
+
+        # List individual stocks briefly
+        stock_strs = [f"{s.symbol} ({s.change_pct:+.1f}%)" for s in cluster.stocks[:3]]
+        lines.append(f"  {', '.join(stock_strs)}")
+
+    # 2. Format individual notable movers (not in clusters)
+    clustered_symbols = set()
+    for cluster in data.sector_clusters:
+        for stock in cluster.stocks:
+            clustered_symbols.add(stock.symbol.upper())
+
+    unclustered = [m for m in data.movers if m.symbol.upper() not in clustered_symbols]
+
+    for mover in unclustered[:5]:
+        emoji = "\U0001f4c8" if mover.change_pct > 0 else "\U0001f4c9"
+
+        # Build context string
+        context = ""
+        if mover.matched_headline:
+            headline_text = mover.matched_headline.get("title", "")[:50]
+            if len(mover.matched_headline.get("title", "")) > 50:
+                headline_text += "..."
+            context = f": {headline_text}"
+        elif mover.move_type == "market_wide":
+            context = labels.get("follows_market", " -- follows market")
+        else:
+            context = labels.get("no_catalyst", " -- no specific catalyst")
+
+        vs_index = ""
+        if mover.vs_index and abs(mover.vs_index) > 1:
+            vs_index = f" (vs Index: {mover.vs_index:+.1f}%)"
+
+        lines.append(f"{emoji} **{mover.symbol}** ({mover.change_pct:+.1f}%){vs_index}{context}")
+
+    # 3. Market context if significant
+    if data.market_wide:
+        if language == "de":
+            direction = "fiel" if data.index_change < 0 else "stieg"
+            lines.append(f"\n\u26a0\ufe0f Breite Marktbewegung: S&P 500 {direction} {abs(data.index_change):.1f}%")
+        else:
+            direction = "fell" if data.index_change < 0 else "rose"
+            lines.append(f"\n\u26a0\ufe0f Market-wide move: S&P 500 {direction} {abs(data.index_change):.1f}%")
+
+    return "\n".join(lines) if lines else labels.get("no_movers", "No significant moves")
 
 
 def group_headlines(headlines: list[dict]) -> list[dict]:
@@ -1028,32 +1357,16 @@ def build_briefing_summary(
 
         return result_lines
 
-    # Build watchpoints with specific context
-    watchpoint_lines = []
-    if sentiment == "Bullish":
-        watchpoint_lines.append(rec_bullish)
-        if top_gainers:
-            sector_lines = group_by_sector(top_gainers, "up")
-            if sector_lines:
-                if language == "de":
-                    watchpoint_lines.append(f"Stärke: {'; '.join(sector_lines)}")
-                else:
-                    watchpoint_lines.append(f"Strength: {'; '.join(sector_lines)}")
-    elif sentiment == "Bearish":
-        watchpoint_lines.append(rec_bearish)
-        if top_losers:
-            sector_lines = group_by_sector(top_losers, "down")
-            if sector_lines:
-                if language == "de":
-                    watchpoint_lines.append(f"Unter Druck: {'; '.join(sector_lines)}")
-                else:
-                    watchpoint_lines.append(f"Under pressure: {'; '.join(sector_lines)}")
-    elif sentiment == "Neutral":
-        watchpoint_lines.append(rec_neutral)
-    else:
-        watchpoint_lines.append(rec_unknown)
-
-    lines.append(" ".join(watchpoint_lines))
+    # Build watchpoints with contextual analysis
+    index_change = get_index_change(market_data)
+    watchpoints_data = build_watchpoints_data(
+        movers=movers or [],
+        headlines=headlines,
+        portfolio_meta=portfolio_meta,
+        index_change=index_change,
+    )
+    watchpoints_text = format_watchpoints(watchpoints_data, language, labels)
+    lines.append(watchpoints_text)
 
     return "\n".join(lines)
 
