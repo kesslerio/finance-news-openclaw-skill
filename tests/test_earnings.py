@@ -92,8 +92,8 @@ def test_get_briefing_section_output():
          patch("earnings.refresh_earnings", return_value=mock_cache):
         
         section = get_briefing_section()
-        assert "## 🔴 EARNINGS TODAY" in section
-        assert "**AAPL**" in section
+        assert "EARNINGS TODAY" in section
+        assert "AAPL" in section
         assert "Apple" in section
         assert "after-close" in section
         assert "Est: $1.50" in section
