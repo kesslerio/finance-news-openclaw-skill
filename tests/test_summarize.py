@@ -212,9 +212,9 @@ class TestFormatWatchpoints:
         cluster = SectorCluster(
             category="Tech",
             stocks=[
-                MoverContext("NVDA", -5.0, 100.0, "Tech", None, "sector", None, None),
-                MoverContext("AMD", -4.0, 80.0, "Tech", None, "sector", None, None),
-                MoverContext("INTC", -3.0, 30.0, "Tech", None, "sector", None, None),
+                MoverContext("NVDA", -5.0, 100.0, "Tech", None, "sector", None),
+                MoverContext("AMD", -4.0, 80.0, "Tech", None, "sector", None),
+                MoverContext("INTC", -3.0, 30.0, "Tech", None, "sector", None),
             ],
             avg_change=-4.0,
             direction="down",
