@@ -14,7 +14,14 @@
     "finanzen_net": {
       "name": "Finanzen.net",
       "enabled": false,
-      "news": "https://www.finanzen.net/rss/news"
+      "news": "https://www.finanzen.net/rss/news",
+      "note": "Disabled - Akamai WAF blocks all requests with 403"
+    },
+    "wallstreet_online": {
+      "name": "Wallstreet Online",
+      "enabled": true,
+      "news": "https://www.wallstreet-online.de/rss/nachrichten-alle.xml",
+      "note": "Germany's largest finance community - good stock-specific coverage"
     },
     "handelsblatt": {
       "name": "Handelsblatt",
@@ -70,7 +77,7 @@
   },
   "headline_sources": ["reuters", "wsj", "ft", "bloomberg", "marketwatch", "cnbc", "yahoo"],
   "headline_sources_by_lang": {
-    "de": ["tagesschau", "handelsblatt", "zeit", "finanzen_net", "reuters", "wsj", "ft", "bloomberg", "marketwatch", "cnbc", "yahoo"],
+    "de": ["wallstreet_online", "tagesschau", "handelsblatt", "zeit", "reuters", "wsj", "ft", "bloomberg", "marketwatch", "cnbc", "yahoo"],
     "en": ["reuters", "wsj", "ft", "bloomberg", "marketwatch", "cnbc", "yahoo"]
   },
   "headline_exclude": [],
@@ -84,12 +91,12 @@
     "tagesschau": 4,
     "handelsblatt": 4,
     "zeit": 4,
-    "finanzen_net": 3,
+    "wallstreet_online": 5,
     "yahoo": 1
   },
   "source_tiers": {
     "paid": ["wsj", "ft", "barrons"],
-    "free": ["bloomberg", "marketwatch", "yahoo", "cnbc", "tagesschau", "handelsblatt", "zeit", "finanzen_net"]
+    "free": ["bloomberg", "marketwatch", "yahoo", "cnbc", "tagesschau", "handelsblatt", "zeit", "wallstreet_online"]
   },
   "headline_shortlist_size_by_lang": {
     "de": 30,
