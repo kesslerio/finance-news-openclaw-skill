@@ -36,7 +36,7 @@ DEFAULT_LLM_FALLBACK = ["gemini", "minimax", "claude"]
 HEADLINE_SHORTLIST_SIZE = 20
 HEADLINE_MERGE_THRESHOLD = 0.82
 HEADLINE_MAX_AGE_HOURS = 72
-WATCHPOINTS_BIG_MOVE_THRESHOLD = 3.0
+WATCHPOINTS_BIG_MOVE_THRESHOLD = 1.0  # Match get_portfolio_movers min_abs_change
 
 STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is",
