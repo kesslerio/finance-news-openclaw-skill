@@ -787,10 +787,10 @@ def select_top_headlines(
         item["source"] = ", ".join(sources) if sources else "Unknown"
         item["link"] = links[0] if links else ""
 
-    # Translate to German if needed
+    # Translate to German if needed - translate FULL shortlist for LLM prompt
     translation_used = None
     if language == "de":
-        missing = [item for item in selected if not item.get("title_de")]
+        missing = [item for item in shortlist if not item.get("title_de")]
         if missing:
             titles = [item["title"] for item in missing]
             translated, success = translate_headlines(titles, deadline=deadline)
@@ -1077,8 +1077,8 @@ def format_market_data(market_data: dict) -> str:
     return '\n'.join(lines)
 
 
-def format_headlines(headlines: list) -> str:
-    """Format headlines for the prompt."""
+def format_headlines(headlines: list, language: str = "en") -> str:
+    """Format headlines for the prompt. Uses title_de when available for German."""
     lines = ["## Headlines\n"]
 
     for article in headlines[:MAX_HEADLINES_IN_PROMPT]:
@@ -1089,7 +1089,10 @@ def format_headlines(headlines: list) -> str:
                 source = ", ".join(sorted(sources))
             else:
                 source = "Unknown"
+        # Use translated title for German if available
         title = article.get('title', '')
+        if language == "de" and article.get('title_de'):
+            title = article.get('title_de')
         link = article.get('link', '')
         if not link:
             links = article.get('links')
@@ -1479,7 +1482,7 @@ def generate_briefing(args):
     if market_data:
         content_parts.append(format_market_data(market_data))
         if headline_shortlist:
-            content_parts.append(format_headlines(headline_shortlist))
+            content_parts.append(format_headlines(headline_shortlist, language=language))
             content_parts.append(format_sources(top_headlines, labels))
 
     # Only include portfolio if fetch succeeded (no error key)
