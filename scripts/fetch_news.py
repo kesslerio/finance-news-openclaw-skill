@@ -224,7 +224,28 @@ def _get_best_feed_url(feeds: dict) -> str | None:
     return None
 
 
-def fetch_rss(url: str, limit: int = 10, timeout: int = 15, deadline: float | None = None) -> list[dict]:
+def is_generic_headline(title: str) -> bool:
+    if not title:
+        return False
+    normalized = title.strip().lower()
+    if normalized.startswith("company news for "):
+        return True
+    generic_prefixes = (
+        "company news for",
+        "stocks to watch",
+        "market update:",
+        "market news:",
+    )
+    return any(normalized.startswith(prefix) for prefix in generic_prefixes)
+
+
+def fetch_rss(
+    url: str,
+    limit: int = 10,
+    timeout: int = 15,
+    deadline: float | None = None,
+    max_age_hours: float | None = None,
+) -> list[dict]:
     """Fetch and parse RSS/Atom feed using feedparser with retry logic."""
     # Fetch content with retry (returns bytes for feedparser to handle encoding)
     content = fetch_with_retry(url, timeout=timeout, deadline=deadline)
@@ -239,10 +260,13 @@ def fetch_rss(url: str, limit: int = 10, timeout: int = 15, deadline: float | No
         return []
 
     items = []
+    now_ts = datetime.now().timestamp()
     for entry in parsed.entries[:limit]:
         # Skip entries without title or link
         title = entry.get('title', '').strip()
         if not title:
+            continue
+        if is_generic_headline(title):
             continue
 
         # Link handling: Atom uses 'link' dict, RSS uses string
@@ -260,6 +284,10 @@ def fetch_rss(url: str, limit: int = 10, timeout: int = 15, deadline: float | No
                 published_at = parsedate_to_datetime(published).timestamp()
             except Exception:
                 published_at = None
+        if max_age_hours is not None and isinstance(published_at, (int, float)) and published_at:
+            age_hours = (now_ts - published_at) / 3600.0
+            if age_hours > max_age_hours:
+                continue
 
         # Description handling: summary vs description
         description = entry.get('summary', '') or entry.get('description', '')
@@ -533,6 +561,7 @@ def get_market_news(
     deadline: float | None = None,
     rss_timeout: int = 15,
     subprocess_timeout: int = 30,
+    headline_max_age_hours: float | None = None,
 ) -> dict:
     """Get market overview (indices + top headlines) as data."""
     sources = load_sources()
@@ -598,7 +627,13 @@ def get_market_news(
                     effective_timeout = clamp_timeout(rss_timeout, deadline)
                 except TimeoutError:
                     break
-                articles = fetch_rss(feed_url, limit, timeout=effective_timeout, deadline=deadline)
+                articles = fetch_rss(
+                    feed_url,
+                    limit,
+                    timeout=effective_timeout,
+                    deadline=deadline,
+                    max_age_hours=headline_max_age_hours,
+                )
                 for article in articles:
                     article['source_id'] = source
                     article['source'] = feeds.get('name', source)

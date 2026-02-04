@@ -36,11 +36,16 @@ DEFAULT_LLM_FALLBACK = ["gemini", "minimax", "claude"]
 HEADLINE_SHORTLIST_SIZE = 20
 HEADLINE_MERGE_THRESHOLD = 0.82
 HEADLINE_MAX_AGE_HOURS = 72
+WATCHPOINTS_BIG_MOVE_THRESHOLD = 1.0  # Match get_portfolio_movers min_abs_change
 
 STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is",
     "it", "of", "on", "or", "that", "the", "to", "with", "will", "after", "before",
     "about", "over", "under", "into", "amid", "as", "its", "new", "newly"
+}
+
+INTL_TICKER_NAME_OVERRIDES = {
+    "8411.T": "Mizuho Financial",
 }
 
 SUPPORTED_MODELS = {"gemini", "minimax", "claude"}
@@ -129,6 +134,17 @@ def parse_model_list(raw: str | None, default: list[str]) -> list[str]:
         if item in SUPPORTED_MODELS and item not in result:
             result.append(item)
     return result or default
+
+
+def ticker_to_name(symbol: str, portfolio_meta: dict | None = None) -> str:
+    if not symbol:
+        return ""
+    symbol_upper = symbol.upper()
+    if portfolio_meta:
+        name = (portfolio_meta.get(symbol_upper, {}) or {}).get("name", "")
+        if name:
+            return name
+    return INTL_TICKER_NAME_OVERRIDES.get(symbol_upper, "")
 
 LANG_PROMPTS = {
     "de": "Output must be in German only.",
@@ -628,14 +644,21 @@ def format_watchpoints(
         # Build context string
         context = ""
         if mover.matched_headline:
-            headline_text = mover.matched_headline.get("title", "")[:50]
-            if len(mover.matched_headline.get("title", "")) > 50:
+            headline_text = mover.matched_headline.get("title_de") if language == "de" else None
+            headline_text = headline_text or mover.matched_headline.get("title", "")
+            headline_text = headline_text.strip()
+            if len(headline_text) > 60:
                 headline_text += "..."
-            context = f": {headline_text}"
+            source = mover.matched_headline.get("source", "")
+            source_str = f" ({source})" if source else ""
+            context = f": {headline_text[:60]}{source_str}"
         elif mover.move_type == "market_wide":
             context = labels.get("follows_market", " -- follows market")
         else:
-            context = labels.get("no_catalyst", " -- no specific catalyst")
+            if abs(mover.change_pct) >= WATCHPOINTS_BIG_MOVE_THRESHOLD:
+                context = labels.get("likely_sector_contagion", " -- likely sector contagion")
+            else:
+                continue
 
         vs_index = ""
         if mover.vs_index and abs(mover.vs_index) > 1:
@@ -764,15 +787,17 @@ def select_top_headlines(
         item["source"] = ", ".join(sources) if sources else "Unknown"
         item["link"] = links[0] if links else ""
 
-    # Translate to German if needed
+    # Translate to German if needed - translate FULL shortlist for LLM prompt
     translation_used = None
     if language == "de":
-        titles = [item["title"] for item in selected]
-        translated, success = translate_headlines(titles, deadline=deadline)
-        if success:
-            translation_used = "gateway"  # Model selected by gateway
-            for item, translated_title in zip(selected, translated):
-                item["title_de"] = translated_title
+        missing = [item for item in shortlist if not item.get("title_de")]
+        if missing:
+            titles = [item["title"] for item in missing]
+            translated, success = translate_headlines(titles, deadline=deadline)
+            if success:
+                translation_used = "gateway"  # Model selected by gateway
+                for item, translated_title in zip(missing, translated):
+                    item["title_de"] = translated_title
 
     return selected, shortlist, "gateway", translation_used
 
@@ -865,6 +890,32 @@ def translate_headlines(
         print(f"  ↳ Invalid format: {type(data)}", file=sys.stderr)
 
     return titles, False
+
+
+def translate_headline_items(headlines: list[dict], deadline: float | None) -> bool:
+    if not headlines:
+        return False
+
+    titles = []
+    for item in headlines:
+        title = (item.get("title") or "").strip()
+        if title and not item.get("title_de"):
+            titles.append(title)
+
+    if not titles:
+        return True
+
+    unique_titles = list(dict.fromkeys(titles))
+    translated, success = translate_headlines(unique_titles, deadline=deadline)
+    if not success:
+        return False
+
+    mapping = {orig: trans for orig, trans in zip(unique_titles, translated)}
+    for item in headlines:
+        title = (item.get("title") or "").strip()
+        if title in mapping:
+            item["title_de"] = mapping[title]
+    return True
 
 
 def summarize_with_claude(
@@ -1026,8 +1077,8 @@ def format_market_data(market_data: dict) -> str:
     return '\n'.join(lines)
 
 
-def format_headlines(headlines: list) -> str:
-    """Format headlines for the prompt."""
+def format_headlines(headlines: list, language: str = "en") -> str:
+    """Format headlines for the prompt. Uses title_de when available for German."""
     lines = ["## Headlines\n"]
 
     for article in headlines[:MAX_HEADLINES_IN_PROMPT]:
@@ -1038,7 +1089,10 @@ def format_headlines(headlines: list) -> str:
                 source = ", ".join(sorted(sources))
             else:
                 source = "Unknown"
+        # Use translated title for German if available
         title = article.get('title', '')
+        if language == "de" and article.get('title_de'):
+            title = article.get('title_de')
         link = article.get('link', '')
         if not link:
             links = article.get('links')
@@ -1360,6 +1414,8 @@ def generate_briefing(args):
     
     # Get market overview
     headline_limit = 10 if fast_mode else 15
+    # Apply 24h recency filter for daily briefings
+    headline_max_age = 24.0 if args.time in ("morning", "evening") else None
     market_data = get_market_news(
         headline_limit,
         regions=["us", "europe", "japan"],
@@ -1368,6 +1424,7 @@ def generate_briefing(args):
         deadline=deadline,
         rss_timeout=rss_timeout,
         subprocess_timeout=subprocess_timeout,
+        headline_max_age_hours=headline_max_age,
     )
 
     # Model selection is now handled by the openclaw gateway (configured in openclaw.json)
@@ -1425,7 +1482,7 @@ def generate_briefing(args):
     if market_data:
         content_parts.append(format_market_data(market_data))
         if headline_shortlist:
-            content_parts.append(format_headlines(headline_shortlist))
+            content_parts.append(format_headlines(headline_shortlist, language=language))
             content_parts.append(format_sources(top_headlines, labels))
 
     # Only include portfolio if fetch succeeded (no error key)
