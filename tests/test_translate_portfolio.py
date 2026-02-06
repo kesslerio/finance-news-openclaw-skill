@@ -13,7 +13,8 @@ def test_has_pretranslated_portfolio_true_when_title_de_present():
                 "stocks": {
                     "NOVO-B.CO": {
                         "articles": [
-                            {"title": "Title", "title_de": "Titel"}
+                            {"title": "Title", "title_de": "Titel"},
+                            {"title": "Another", "title_de": "Noch einer"},
                         ]
                     }
                 }
@@ -31,6 +32,24 @@ def test_has_pretranslated_portfolio_false_when_missing_title_de():
                     "AAPL": {
                         "articles": [
                             {"title": "Apple updates guidance"}
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    assert has_pretranslated_portfolio(data) is False
+
+
+def test_has_pretranslated_portfolio_false_when_partial_translation():
+    data = {
+        "raw_data": {
+            "portfolio": {
+                "stocks": {
+                    "NOVO-B.CO": {
+                        "articles": [
+                            {"title": "Title one", "title_de": "Titel eins"},
+                            {"title": "Title two"},
                         ]
                     }
                 }

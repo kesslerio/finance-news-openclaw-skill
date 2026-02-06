@@ -41,6 +41,20 @@ COMPANY_SPECIFIC_KEYWORDS = [
     "merger", "announces", "reports",
 ]
 
+
+def has_term(text: str, term: str) -> bool:
+    """Check term match with token boundaries to avoid substring false positives."""
+    if not term:
+        return False
+    pattern = rf"(?<![a-z0-9]){re.escape(term.lower())}(?![a-z0-9])"
+    return bool(re.search(pattern, text))
+
+
+def has_any_term(text: str, terms: list[str]) -> bool:
+    """Check whether text contains any term using boundary-aware matching."""
+    return any(has_term(text, term) for term in terms)
+
+
 # Source credibility scores (0-1)
 SOURCE_CREDIBILITY = {
     "Wall Street Journal": 0.95,
@@ -117,12 +131,12 @@ def classify_category(title: str, description: str = "") -> list[str]:
     
     for category, keywords in CATEGORY_KEYWORDS.items():
         for keyword in keywords:
-            if keyword in text:
+            if has_term(text, keyword):
                 categories.append(category)
                 break
 
-    has_broad_equity_context = any(term in text for term in BROAD_EARNINGS_CONTEXT)
-    has_company_specific_signal = any(term in text for term in COMPANY_SPECIFIC_KEYWORDS)
+    has_broad_equity_context = has_any_term(text, BROAD_EARNINGS_CONTEXT)
+    has_company_specific_signal = has_any_term(text, COMPANY_SPECIFIC_KEYWORDS)
     has_ticker_pattern = bool(
         re.search(
             r"\$[A-Z]{1,5}\b|\([A-Z]{1,5}(?:\.[A-Z]{1,3})?\)|\b[A-Z]{1,5}\.[A-Z]{1,3}\b",
@@ -152,18 +166,18 @@ def score_market_impact(title: str, description: str = "") -> float:
     # High impact indicators
     high_impact = ["fed", "rate cut", "rate hike", "sanctions", "war", "oil", "recession"]
     for term in high_impact:
-        if term in text:
+        if has_term(text, term):
             score += 0.15
 
-    has_earnings = any(term in text for term in ["earnings", "guidance", "eps", "revenue", "profit"])
-    has_broad_context = any(term in text for term in BROAD_EARNINGS_CONTEXT)
+    has_earnings = has_any_term(text, ["earnings", "guidance", "eps", "revenue", "profit"])
+    has_broad_context = has_any_term(text, BROAD_EARNINGS_CONTEXT)
     if has_earnings and has_broad_context:
         score += 0.12
     
     # Medium impact
     medium_impact = ["profit", "revenue", "gdp", "inflation", "tariff", "merger", "acquisition"]
     for term in medium_impact:
-        if term in text:
+        if has_term(text, term):
             score += 0.1
     
     return min(score, 1.0)

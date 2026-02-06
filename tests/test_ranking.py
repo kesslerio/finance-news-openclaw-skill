@@ -17,6 +17,12 @@ def test_classify_category():
     assert "geopolitics" in classify_category("US imposes new sanctions on Russia")
     assert classify_category("Weather is nice") == ["general"]
 
+
+def test_classify_category_downgrade_not_broad_context():
+    categories = classify_category("Apple downgrade follows weak iPhone demand")
+    assert "company_specific" in categories
+    assert "equity_broad" not in categories
+
 def test_calculate_score_impact():
     weights = {"market_impact": 0.4, "novelty": 0.2, "breadth": 0.2, "credibility": 0.1, "diversity": 0.1}
     category_counts = {}

@@ -115,13 +115,18 @@ def replace_headlines(portfolio_message: str, original: list[str], translated: l
 
 
 def has_pretranslated_portfolio(data: dict) -> bool:
-    """Return True when portfolio article translations already exist in raw_data."""
+    """Return True when all relevant portfolio headlines already have title_de."""
     raw_portfolio = (data.get("raw_data") or {}).get("portfolio") or {}
+    saw_relevant_headline = False
     for stock_data in (raw_portfolio.get("stocks") or {}).values():
         for article in stock_data.get("articles", [])[:2]:
-            if article.get("title_de"):
-                return True
-    return False
+            title = (article.get("title") or "").strip()
+            if not title:
+                continue
+            saw_relevant_headline = True
+            if not (article.get("title_de") or "").strip():
+                return False
+    return saw_relevant_headline
 
 
 def main():
