@@ -99,6 +99,9 @@ DEFAULT_SOURCE_WEIGHTS = {
     "wsj": 3,
     "cnbc": 2
 }
+LARGE_PORTFOLIO_FALLBACK_MULTIPLIER = 4
+LARGE_PORTFOLIO_FALLBACK_MIN_SYMBOLS = 20
+LARGE_PORTFOLIO_FALLBACK_TIMEOUT_CAP_SEC = 10
 
 
 ensure_venv()
@@ -375,7 +378,14 @@ def _fetch_via_yfinance(
             return results
 
         tickers = " ".join(symbols)
-        df = yf.download(tickers, period="5d", progress=False, threads=True, ignore_tz=True)
+        df = yf.download(
+            tickers,
+            period="5d",
+            progress=False,
+            threads=True,
+            ignore_tz=True,
+            timeout=timeout,
+        )
 
         for symbol in symbols:
             try:
@@ -966,6 +976,22 @@ def web_search_news(symbol: str, limit: int = 5) -> list[dict]:
     return articles
 
 
+def _resolve_change_percent(quote_data: dict) -> float:
+    """Return numeric change percent with defensive fallbacks."""
+    change = quote_data.get("change_percent")
+    if isinstance(change, (int, float)):
+        return float(change)
+
+    price = quote_data.get("price")
+    prev_close = quote_data.get("prev_close")
+    open_price = quote_data.get("open")
+    if isinstance(price, (int, float)) and isinstance(prev_close, (int, float)) and prev_close:
+        return ((price - prev_close) / prev_close) * 100
+    if isinstance(price, (int, float)) and isinstance(open_price, (int, float)) and open_price:
+        return ((price - open_price) / open_price) * 100
+    return 0.0
+
+
 def get_large_portfolio_news(
     limit: int = 3,
     top_movers_count: int = 10,
@@ -989,23 +1015,43 @@ def get_large_portfolio_news(
     except TimeoutError:
          raise PortfolioError("Deadline exceeded before price fetch")
 
-    # This uses the new yfinance batching
-    quotes = fetch_market_data(symbols, timeout=effective_timeout, deadline=deadline)
+    # For large portfolios, start with yfinance batch for predictable runtime.
+    quotes = _fetch_via_yfinance(symbols, timeout=effective_timeout, deadline=deadline)
+
+    # Fill missing symbols with openbb, but cap requests to avoid deadline overruns.
+    missing = [sym for sym in symbols if sym not in quotes]
+    if missing and (time_left(deadline) is None or time_left(deadline) > 0):
+        # Fetch enough symbols to recover top movers even when some quotes are missing.
+        fallback_limit = max(
+            top_movers_count * LARGE_PORTFOLIO_FALLBACK_MULTIPLIER,
+            LARGE_PORTFOLIO_FALLBACK_MIN_SYMBOLS,
+        )
+        fallback_symbols = missing[:fallback_limit]
+        fallback_timeout = min(subprocess_timeout, LARGE_PORTFOLIO_FALLBACK_TIMEOUT_CAP_SEC)
+        fallback_quotes = fetch_market_data(
+            fallback_symbols,
+            timeout=fallback_timeout,
+            deadline=deadline,
+            allow_price_fallback=True,
+        )
+        quotes.update(fallback_quotes)
+
+    if not quotes:
+        raise PortfolioError("No portfolio quote data available")
     
     # 2. Identify top movers
     movers = []
     for symbol, data in quotes.items():
-        change = data.get('change_percent', 0)
+        change = _resolve_change_percent(data)
         movers.append((symbol, change, data))
-    
-    # Sort: Absolute change descending? Or Gainers vs Losers?
-    # Issue says: "Biggest gainers (top 5), Biggest losers (top 5)"
-    
-    movers.sort(key=lambda x: x[1]) # Sort by change ascending
-    
-    losers = movers[:5] # Bottom 5
-    gainers = movers[-5:] # Top 5
-    gainers.reverse() # Descending
+
+    # Rank movers by signed change, then take strongest gainers and losers.
+    movers.sort(key=lambda x: x[1])  # Sort by change ascending
+
+    max_each = max(1, top_movers_count // 2)
+    losers = movers[:max_each]  # Bottom movers
+    gainers = movers[-max_each:]  # Top movers
+    gainers.reverse()  # Descending
     
     # Combined list for news fetching
     # Ensure uniqueness if < 10 stocks total
@@ -1017,6 +1063,17 @@ def get_large_portfolio_news(
         if sym not in seen:
             top_symbols.append(sym)
             seen.add(sym)
+
+    # Backfill if top list is short (e.g. odd mover count / sparse quotes).
+    if len(top_symbols) < top_movers_count:
+        remaining = [m for m in movers if m[0] not in seen]
+        remaining.sort(key=lambda x: abs(x[1]), reverse=True)
+        for sym, _, _ in remaining:
+            if sym not in seen:
+                top_symbols.append(sym)
+                seen.add(sym)
+            if len(top_symbols) >= top_movers_count:
+                break
             
     # 3. Fetch news for top movers
     news = {
