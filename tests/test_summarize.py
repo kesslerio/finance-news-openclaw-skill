@@ -327,6 +327,8 @@ class TestFormatWatchpoints:
             market_wide=False,
         )
         result = format_watchpoints(data, "en", {})
+        assert "Legend" in result
+        assert "Sector Rotation" in result
         assert "Tech" in result
         assert "-4.0%" in result
         assert "vs Index" in result
@@ -348,6 +350,7 @@ class TestFormatWatchpoints:
             market_wide=False,
         )
         result = format_watchpoints(data, "en", {})
+        assert "Single-Name Moves" in result
         assert "NVDA" in result
         assert "+5.0%" in result
         assert "record revenue" in result

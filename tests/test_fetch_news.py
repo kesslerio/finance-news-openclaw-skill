@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import json
 import pytest
 from unittest.mock import Mock, patch, MagicMock
-from fetch_news import fetch_market_data, fetch_rss, _get_best_feed_url
+from fetch_news import fetch_market_data, fetch_rss, _get_best_feed_url, get_large_portfolio_news
 from utils import clamp_timeout, compute_deadline
 
 
@@ -134,3 +134,41 @@ def test_fetch_market_data_price_fallback(monkeypatch):
 
     with_fallback = fetch_market_data(["^GSPC"], allow_price_fallback=True)
     assert with_fallback["^GSPC"]["price"] == 100
+
+
+def test_get_large_portfolio_news_handles_none_change(monkeypatch):
+    monkeypatch.setattr("fetch_news.get_portfolio_symbols", lambda: ["AAA", "BBB", "CCC"])
+    monkeypatch.setattr(
+        "fetch_news.fetch_market_data",
+        lambda *_a, **_k: {
+            "AAA": {"change_percent": None, "price": 110.0, "prev_close": 100.0},
+            "BBB": {"change_percent": -1.5, "price": 50.0},
+            "CCC": {"change_percent": 2.0, "price": 20.0},
+        },
+    )
+    monkeypatch.setattr("fetch_news.fetch_ticker_news", lambda *_a, **_k: [])
+
+    result = get_large_portfolio_news(limit=1, portfolio_meta={"AAA": {"name": "Alpha"}})
+
+    assert "stocks" in result
+    assert set(result["stocks"].keys()) == {"AAA", "BBB", "CCC"}
+
+
+def test_get_large_portfolio_news_respects_top_movers_count(monkeypatch):
+    monkeypatch.setattr("fetch_news.get_portfolio_symbols", lambda: ["AAA", "BBB", "CCC", "DDD"])
+    monkeypatch.setattr(
+        "fetch_news._fetch_via_yfinance",
+        lambda *_a, **_k: {
+            "AAA": {"change_percent": 5.0, "price": 10.0},
+            "BBB": {"change_percent": -4.0, "price": 20.0},
+            "CCC": {"change_percent": 3.0, "price": 30.0},
+            "DDD": {"change_percent": -2.0, "price": 40.0},
+        },
+    )
+    monkeypatch.setattr("fetch_news.fetch_market_data", lambda *_a, **_k: {})
+    monkeypatch.setattr("fetch_news.fetch_ticker_news", lambda *_a, **_k: [])
+
+    result = get_large_portfolio_news(limit=1, top_movers_count=2, portfolio_meta={})
+
+    assert result["meta"]["top_movers_count"] == 2
+    assert len(result["stocks"]) == 2

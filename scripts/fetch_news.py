@@ -375,7 +375,14 @@ def _fetch_via_yfinance(
             return results
 
         tickers = " ".join(symbols)
-        df = yf.download(tickers, period="5d", progress=False, threads=True, ignore_tz=True)
+        df = yf.download(
+            tickers,
+            period="5d",
+            progress=False,
+            threads=True,
+            ignore_tz=True,
+            timeout=timeout,
+        )
 
         for symbol in symbols:
             try:
@@ -989,23 +996,51 @@ def get_large_portfolio_news(
     except TimeoutError:
          raise PortfolioError("Deadline exceeded before price fetch")
 
-    # This uses the new yfinance batching
-    quotes = fetch_market_data(symbols, timeout=effective_timeout, deadline=deadline)
+    # For large portfolios, start with yfinance batch for predictable runtime.
+    quotes = _fetch_via_yfinance(symbols, timeout=effective_timeout, deadline=deadline)
+
+    # Fill missing symbols with openbb, but cap requests to avoid deadline overruns.
+    missing = [sym for sym in symbols if sym not in quotes]
+    if missing and (time_left(deadline) is None or time_left(deadline) > 0):
+        fallback_limit = max(top_movers_count * 4, 20)
+        fallback_symbols = missing[:fallback_limit]
+        fallback_timeout = min(subprocess_timeout, 10)
+        fallback_quotes = fetch_market_data(
+            fallback_symbols,
+            timeout=fallback_timeout,
+            deadline=deadline,
+            allow_price_fallback=True,
+        )
+        quotes.update(fallback_quotes)
+
+    if not quotes:
+        raise PortfolioError("No portfolio quote data available")
     
     # 2. Identify top movers
     movers = []
     for symbol, data in quotes.items():
-        change = data.get('change_percent', 0)
+        change = data.get('change_percent')
+        if not isinstance(change, (int, float)):
+            price = data.get('price')
+            prev_close = data.get('prev_close')
+            open_price = data.get('open')
+            if isinstance(price, (int, float)) and isinstance(prev_close, (int, float)) and prev_close:
+                change = ((price - prev_close) / prev_close) * 100
+            elif isinstance(price, (int, float)) and isinstance(open_price, (int, float)) and open_price:
+                change = ((price - open_price) / open_price) * 100
+            else:
+                change = 0.0
         movers.append((symbol, change, data))
     
     # Sort: Absolute change descending? Or Gainers vs Losers?
     # Issue says: "Biggest gainers (top 5), Biggest losers (top 5)"
     
-    movers.sort(key=lambda x: x[1]) # Sort by change ascending
-    
-    losers = movers[:5] # Bottom 5
-    gainers = movers[-5:] # Top 5
-    gainers.reverse() # Descending
+    movers.sort(key=lambda x: x[1])  # Sort by change ascending
+
+    max_each = max(1, top_movers_count // 2)
+    losers = movers[:max_each]  # Bottom movers
+    gainers = movers[-max_each:]  # Top movers
+    gainers.reverse()  # Descending
     
     # Combined list for news fetching
     # Ensure uniqueness if < 10 stocks total
@@ -1017,6 +1052,17 @@ def get_large_portfolio_news(
         if sym not in seen:
             top_symbols.append(sym)
             seen.add(sym)
+
+    # Backfill if top list is short (e.g. odd mover count / sparse quotes).
+    if len(top_symbols) < top_movers_count:
+        remaining = [m for m in movers if m[0] not in seen]
+        remaining.sort(key=lambda x: abs(x[1]), reverse=True)
+        for sym, _, _ in remaining:
+            if sym not in seen:
+                top_symbols.append(sym)
+                seen.add(sym)
+            if len(top_symbols) >= top_movers_count:
+                break
             
     # 3. Fetch news for top movers
     news = {

@@ -649,18 +649,36 @@ def format_watchpoints(
     labels: dict,
 ) -> str:
     """Format watchpoints with contextual analysis."""
-    lines = []
+    no_movers_text = labels.get("no_movers", "No significant moves")
+    if not data.movers and not data.sector_clusters and not data.market_wide:
+        return no_movers_text
+
+    if language == "de":
+        legend_default = "_Legende: `vs Index` = Kursbewegung minus S&P-500-Bewegung._"
+        cluster_heading_default = "Sektorrotation"
+        singles_heading_default = "Einzeltitel"
+        market_heading_default = "Marktkontext"
+    else:
+        legend_default = "_Legend: `vs Index` = move minus S&P 500 move._"
+        cluster_heading_default = "Sector Rotation"
+        singles_heading_default = "Single-Name Moves"
+        market_heading_default = "Market Context"
+
+    lines = [labels.get("watchpoints_legend", legend_default)]
+    cluster_lines = []
+    single_name_lines = []
+    market_lines = []
 
     # 1. Format sector clusters first (most insightful)
     for cluster in data.sector_clusters:
         emoji = "📈" if cluster.direction == "up" else "📉"
         vs_index_str = f" (vs Index: {cluster.vs_index:+.1f}%)" if abs(cluster.vs_index) > 0.5 else ""
 
-        lines.append(f"{emoji} **{cluster.category}** ({cluster.avg_change:+.1f}%){vs_index_str}")
+        cluster_lines.append(f"{emoji} **{cluster.category}** ({cluster.avg_change:+.1f}%){vs_index_str}")
 
         # List individual stocks briefly
         stock_strs = [f"{s.symbol} ({s.change_pct:+.1f}%)" for s in cluster.stocks[:3]]
-        lines.append(f"  {', '.join(stock_strs)}")
+        cluster_lines.append(f"  {', '.join(stock_strs)}")
 
     # 2. Format individual notable movers (not in clusters)
     clustered_symbols = set()
@@ -680,10 +698,10 @@ def format_watchpoints(
             headline_text = headline_text or mover.matched_headline.get("title", "")
             headline_text = headline_text.strip()
             if len(headline_text) > 60:
-                headline_text += "..."
+                headline_text = f"{headline_text[:60]}..."
             source = mover.matched_headline.get("source", "")
             source_str = f" ({source})" if source else ""
-            context = f": {headline_text[:60]}{source_str}"
+            context = f": {headline_text}{source_str}"
         elif mover.move_type == "market_wide":
             context = labels.get("follows_market", " -- follows market")
         else:
@@ -696,18 +714,35 @@ def format_watchpoints(
         if mover.vs_index and abs(mover.vs_index) > 1:
             vs_index = f" (vs Index: {mover.vs_index:+.1f}%)"
 
-        lines.append(f"{emoji} **{mover.symbol}** ({mover.change_pct:+.1f}%){vs_index}{context}")
+        single_name_lines.append(f"{emoji} **{mover.symbol}** ({mover.change_pct:+.1f}%){vs_index}{context}")
 
     # 3. Market context if significant
     if data.market_wide:
         if language == "de":
             direction = "fiel" if data.index_change < 0 else "stieg"
-            lines.append(f"\n⚠️ Breite Marktbewegung: S&P 500 {direction} {abs(data.index_change):.1f}%")
+            market_lines.append(f"⚠️ Breite Marktbewegung: S&P 500 {direction} {abs(data.index_change):.1f}%")
         else:
             direction = "fell" if data.index_change < 0 else "rose"
-            lines.append(f"\n⚠️ Market-wide move: S&P 500 {direction} {abs(data.index_change):.1f}%")
+            market_lines.append(f"⚠️ Market-wide move: S&P 500 {direction} {abs(data.index_change):.1f}%")
 
-    return "\n".join(lines) if lines else labels.get("no_movers", "No significant moves")
+    if cluster_lines:
+        lines.append("")
+        lines.append(f"**{labels.get('watchpoints_section_clusters', cluster_heading_default)}**")
+        lines.extend(cluster_lines)
+
+    if single_name_lines:
+        lines.append("")
+        lines.append(f"**{labels.get('watchpoints_section_single_names', singles_heading_default)}**")
+        lines.extend(single_name_lines)
+
+    if market_lines:
+        lines.append("")
+        lines.append(f"**{labels.get('watchpoints_section_market_context', market_heading_default)}**")
+        lines.extend(market_lines)
+
+    if len(lines) == 1:
+        return no_movers_text
+    return "\n".join(lines)
 
 
 def group_headlines(headlines: list[dict]) -> list[dict]:
@@ -1290,7 +1325,12 @@ def classify_sentiment(market_data: dict, portfolio_data: dict | None = None) ->
     }
 
 
-def build_portfolio_message(portfolio_data: dict, labels: dict, language: str) -> str:
+def build_portfolio_message(
+    portfolio_data: dict,
+    labels: dict,
+    language: str,
+    deadline: float | None = None,
+) -> str:
     """Build a portfolio movers message with translated titles and source refs."""
     if not portfolio_data:
         return ""
@@ -1334,8 +1374,9 @@ def build_portfolio_message(portfolio_data: dict, labels: dict, language: str) -
             title = (art.get("title") or "").strip()
             if title:
                 titles_to_translate.append(title)
+        titles_to_translate = list(dict.fromkeys(titles_to_translate))
         if titles_to_translate:
-            translated, success = translate_headlines(titles_to_translate, deadline=None)
+            translated, success = translate_headlines(titles_to_translate, deadline=deadline)
             if success:
                 for orig, trans in zip(titles_to_translate, translated):
                     title_translations[orig] = trans
@@ -1594,8 +1635,7 @@ def generate_briefing(args):
     )
     
     # Get portfolio news (limit stocks for performance)
-    portfolio_deadline_sec = int(config.get("portfolio_deadline_sec", 360))
-    portfolio_deadline = compute_deadline(max(deadline_sec, portfolio_deadline_sec))
+    portfolio_deadline = deadline
     try:
         max_stocks = 2 if fast_mode else DEFAULT_PORTFOLIO_SAMPLE_SIZE
         portfolio_data = get_portfolio_news(
@@ -1621,12 +1661,6 @@ def generate_briefing(args):
         print(f"⚠️ Skipping portfolio movers: {exc}", file=sys.stderr)
         movers = []
 
-    if language == "de" and portfolio_data:
-        portfolio_articles: list[dict] = []
-        for stock_data in portfolio_data.get("stocks", {}).values():
-            portfolio_articles.extend(stock_data.get("articles", [])[:2])
-        translate_headline_items(portfolio_articles, deadline=deadline)
-    
     # Build raw content for summarization
     content_parts = []
 
@@ -1806,7 +1840,7 @@ def generate_briefing(args):
     # Message 2: Portfolio (if available)
     portfolio_output = ""
     if portfolio_data:
-        portfolio_output = build_portfolio_message(portfolio_data, labels, language)
+        portfolio_output = build_portfolio_message(portfolio_data, labels, language, deadline=deadline)
         
     write_debug_once()
 
