@@ -41,11 +41,13 @@ steps:
         OPENBB_MOUNT="-v $OPENBB_BIN:/usr/local/bin/openbb-quote:ro"
       fi
       docker run --rm \
+        --workdir /app \
         -v "$SKILL_DIR/config:/app/config:ro" \
         -v "$SKILL_DIR/scripts:/app/scripts:ro" \
         $OPENBB_MOUNT \
         finance-news-briefing python3 scripts/briefing.py \
           --time "${time}" \
+          --style briefing \
           --lang "${lang}" \
           --json \
           $FAST_FLAG > "$OUTFILE"
@@ -66,6 +68,24 @@ steps:
     stdin: $generate.stdout
     description: Translate portfolio headlines via openclaw
 
+  # Validate deterministic structured macro output before sending
+  - id: validate
+    command: |
+      OUTFILE=$(cat)
+      OUTFILE=$(echo "$OUTFILE" | tr -d '\n')
+      MODE=$(jq -r '.summary_mode // "unknown"' "$OUTFILE")
+      STRUCT_OK=$(jq -r '.summary_structure_ok // false' "$OUTFILE")
+
+      if [ "$MODE" != "deterministic" ] || [ "$STRUCT_OK" != "true" ]; then
+        echo "❌ Refusing to send malformed macro briefing"
+        jq '{summary_mode, summary_model_used, summary_structure_ok, summary_missing_sections, generator}' "$OUTFILE"
+        exit 1
+      fi
+
+      echo "$OUTFILE"
+    stdin: $translate.stdout
+    description: Validate deterministic structured output
+
   # Send macro briefing (market overview) - NO APPROVAL GATE
   - id: send_macro
     command: |
@@ -80,7 +100,7 @@ steps:
       else
         echo "No macro message to send"
       fi
-    stdin: $translate.stdout
+    stdin: $validate.stdout
     description: Send macro briefing
 
   # Send portfolio briefing (stock movers)
@@ -97,5 +117,5 @@ steps:
       else
         echo "No portfolio message to send"
       fi
-    stdin: $translate.stdout
+    stdin: $validate.stdout
     description: Send portfolio briefing

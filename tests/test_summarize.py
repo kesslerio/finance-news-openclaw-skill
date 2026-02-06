@@ -13,6 +13,7 @@ from summarize import (
     WatchpointsData,
     build_watchpoints_data,
     classify_move_type,
+    validate_briefing_structure,
     detect_sector_clusters,
     format_watchpoints,
     get_index_change,
@@ -24,6 +25,47 @@ class FixedDateTime(datetime):
     @classmethod
     def now(cls, tz=None):
         return cls(2026, 1, 1, 15, 0)
+
+
+def test_validate_briefing_structure_success():
+    labels = {
+        "heading_markets": "Markets",
+        "heading_sentiment": "Sentiment",
+        "heading_top_headlines": "Top 5 Headlines",
+        "heading_portfolio_impact": "Portfolio Impact",
+        "heading_watchpoints": "Watchpoints",
+    }
+    summary = "\n".join([
+        "## Market Briefing",
+        "### Markets",
+        "### Sentiment: Neutral",
+        "### Top 5 Headlines",
+        "### Portfolio Impact",
+        "### Watchpoints",
+    ])
+    ok, missing = validate_briefing_structure(summary, labels)
+    assert ok is True
+    assert missing == []
+
+
+def test_validate_briefing_structure_missing_sections():
+    labels = {
+        "heading_markets": "Märkte",
+        "heading_sentiment": "Stimmung",
+        "heading_top_headlines": "Top 5 Schlagzeilen",
+        "heading_portfolio_impact": "Portfolio-Auswirkung",
+        "heading_watchpoints": "Beobachtungspunkte",
+    }
+    summary = "\n".join([
+        "## Marktbriefing",
+        "### Märkte",
+        "### Stimmung: Bärisch",
+        "### Top 5 Schlagzeilen",
+    ])
+    ok, missing = validate_briefing_structure(summary, labels)
+    assert ok is False
+    assert "portfolio_impact" in missing
+    assert "watchpoints" in missing
 
 
 def test_generate_briefing_auto_time_evening(capsys, monkeypatch):
@@ -49,6 +91,7 @@ def test_generate_briefing_auto_time_evening(capsys, monkeypatch):
 
     monkeypatch.setattr(summarize, "get_market_news", fake_market_news)
     monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
+    monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "summarize_with_claude", fake_summary)
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
 

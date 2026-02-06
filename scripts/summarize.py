@@ -1385,6 +1385,34 @@ def build_briefing_summary(
     return "\n".join(lines)
 
 
+def validate_briefing_structure(summary: str, labels: dict) -> tuple[bool, list[str]]:
+    """Validate that deterministic briefing sections are present."""
+    if not summary:
+        return False, [
+            "markets",
+            "sentiment",
+            "top_headlines",
+            "portfolio_impact",
+            "watchpoints",
+        ]
+
+    required = [
+        ("markets", labels.get("heading_markets", "Markets")),
+        ("sentiment", labels.get("heading_sentiment", "Sentiment")),
+        ("top_headlines", labels.get("heading_top_headlines", "Top Headlines")),
+        ("portfolio_impact", labels.get("heading_portfolio_impact", "Portfolio Impact")),
+        ("watchpoints", labels.get("heading_watchpoints", "Watchpoints")),
+    ]
+
+    missing: list[str] = []
+    for key, heading in required:
+        token = f"### {heading}"
+        if token not in summary:
+            missing.append(key)
+
+    return len(missing) == 0, missing
+
+
 def generate_briefing(args):
     """Generate full market briefing."""
     config = load_config()
@@ -1559,25 +1587,33 @@ def generate_briefing(args):
     if args.llm and model and model in SUPPORTED_MODELS:
         summary_list = [model] + [m for m in summary_list if m != model]
 
+    summary_mode = "deterministic"
+    summary_model_used = "deterministic"
     if args.llm and remaining is not None and remaining <= 0:
         print("⚠️ Deadline exceeded; using deterministic summary", file=sys.stderr)
         summary = build_briefing_summary(market_data, portfolio_data, movers, top_headlines, labels, language)
+        summary_mode = "deterministic"
+        summary_model_used = "deterministic_deadline_fallback"
         if args.debug:
             debug_payload.update({
-                "summary_model_used": "deterministic",
+                "summary_model_used": summary_model_used,
                 "summary_model_attempts": summary_list,
             })
     elif args.style == "briefing" and not args.llm:
         summary = build_briefing_summary(market_data, portfolio_data, movers, top_headlines, labels, language)
+        summary_mode = "deterministic"
+        summary_model_used = "deterministic"
         if args.debug:
             debug_payload.update({
-                "summary_model_used": "deterministic",
+                "summary_model_used": summary_model_used,
                 "summary_model_attempts": summary_list,
             })
     else:
         print(f"🤖 Generating AI summary with fallback order: {', '.join(summary_list)}", file=sys.stderr)
         summary = ""
         summary_used = None
+        summary_mode = "llm"
+        summary_model_used = "llm_failed"
         for candidate in summary_list:
             if candidate == "minimax":
                 summary = summarize_with_minimax(content, language, args.style, deadline=deadline)
@@ -1588,6 +1624,7 @@ def generate_briefing(args):
 
             if not summary.startswith("⚠️"):
                 summary_used = candidate
+                summary_model_used = candidate
                 break
             print(summary, file=sys.stderr)
 
@@ -1596,6 +1633,11 @@ def generate_briefing(args):
                 "summary_model_used": summary_used,
                 "summary_model_attempts": summary_list,
             })
+
+    summary_structure_ok = True
+    summary_missing_sections: list[str] = []
+    if args.style == "briefing":
+        summary_structure_ok, summary_missing_sections = validate_briefing_structure(summary, labels)
     
     # Format output
     now = datetime.now()
@@ -1742,6 +1784,17 @@ def generate_briefing(args):
             'time': time_str,
             'language': language,
             'summary': summary,
+            'summary_mode': summary_mode,
+            'summary_model_used': summary_model_used,
+            'summary_model_attempts': summary_list,
+            'summary_structure_ok': summary_structure_ok,
+            'summary_missing_sections': summary_missing_sections,
+            'generator': {
+                'script': str(Path(__file__).resolve()),
+                'style': args.style,
+                'llm_requested': bool(args.llm),
+                'fast_mode': bool(fast_mode),
+            },
             'macro_message': macro_output,
             'portfolio_message': portfolio_output, # New field
             'sources': [
