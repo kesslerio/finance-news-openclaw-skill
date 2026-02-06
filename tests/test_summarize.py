@@ -355,6 +355,31 @@ class TestFormatWatchpoints:
         assert "+5.0%" in result
         assert "record revenue" in result
 
+    def test_truncates_long_headline_context(self):
+        long_title = (
+            "NVIDIA gives unusually detailed long-range guidance for AI datacenter demand "
+            "into fiscal year twenty twenty-seven"
+        )
+        mover = MoverContext(
+            symbol="NVDA",
+            change_pct=6.2,
+            price=100.0,
+            category="Tech",
+            matched_headline={"title": long_title, "source": "WSJ"},
+            move_type="company_specific",
+            vs_index=5.9,
+        )
+        data = WatchpointsData(
+            movers=[mover],
+            sector_clusters=[],
+            index_change=0.3,
+            market_wide=False,
+        )
+        result = format_watchpoints(data, "en", {})
+        expected_truncated = f"{long_title[:60]}..."
+        assert expected_truncated in result
+        assert long_title not in result
+
     def test_formats_market_wide_move_english(self):
         data = WatchpointsData(
             movers=[],

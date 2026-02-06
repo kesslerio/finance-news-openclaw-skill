@@ -653,21 +653,17 @@ def format_watchpoints(
     if not data.movers and not data.sector_clusters and not data.market_wide:
         return no_movers_text
 
-    if language == "de":
-        legend_default = "_Legende: `vs Index` = Kursbewegung minus S&P-500-Bewegung._"
-        cluster_heading_default = "Sektorrotation"
-        singles_heading_default = "Einzeltitel"
-        market_heading_default = "Marktkontext"
-    else:
-        legend_default = "_Legend: `vs Index` = move minus S&P 500 move._"
-        cluster_heading_default = "Sector Rotation"
-        singles_heading_default = "Single-Name Moves"
-        market_heading_default = "Market Context"
+    # Config is the source of truth for localized copy; these are terse safety fallbacks.
+    legend_default = "_Legend: `vs Index` = move relative to S&P 500._"
+    cluster_heading_default = "Sector Rotation"
+    singles_heading_default = "Single-Name Moves"
+    market_heading_default = "Market Context"
 
     lines = [labels.get("watchpoints_legend", legend_default)]
     cluster_lines = []
     single_name_lines = []
     market_lines = []
+    has_content = False
 
     # 1. Format sector clusters first (most insightful)
     for cluster in data.sector_clusters:
@@ -726,21 +722,24 @@ def format_watchpoints(
             market_lines.append(f"⚠️ Market-wide move: S&P 500 {direction} {abs(data.index_change):.1f}%")
 
     if cluster_lines:
+        has_content = True
         lines.append("")
         lines.append(f"**{labels.get('watchpoints_section_clusters', cluster_heading_default)}**")
         lines.extend(cluster_lines)
 
     if single_name_lines:
+        has_content = True
         lines.append("")
         lines.append(f"**{labels.get('watchpoints_section_single_names', singles_heading_default)}**")
         lines.extend(single_name_lines)
 
     if market_lines:
+        has_content = True
         lines.append("")
         lines.append(f"**{labels.get('watchpoints_section_market_context', market_heading_default)}**")
         lines.extend(market_lines)
 
-    if len(lines) == 1:
+    if not has_content:
         return no_movers_text
     return "\n".join(lines)
 

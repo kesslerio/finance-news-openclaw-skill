@@ -139,13 +139,14 @@ def test_fetch_market_data_price_fallback(monkeypatch):
 def test_get_large_portfolio_news_handles_none_change(monkeypatch):
     monkeypatch.setattr("fetch_news.get_portfolio_symbols", lambda: ["AAA", "BBB", "CCC"])
     monkeypatch.setattr(
-        "fetch_news.fetch_market_data",
+        "fetch_news._fetch_via_yfinance",
         lambda *_a, **_k: {
             "AAA": {"change_percent": None, "price": 110.0, "prev_close": 100.0},
             "BBB": {"change_percent": -1.5, "price": 50.0},
             "CCC": {"change_percent": 2.0, "price": 20.0},
         },
     )
+    monkeypatch.setattr("fetch_news.fetch_market_data", lambda *_a, **_k: {})
     monkeypatch.setattr("fetch_news.fetch_ticker_news", lambda *_a, **_k: [])
 
     result = get_large_portfolio_news(limit=1, portfolio_meta={"AAA": {"name": "Alpha"}})

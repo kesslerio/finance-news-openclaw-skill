@@ -99,6 +99,9 @@ DEFAULT_SOURCE_WEIGHTS = {
     "wsj": 3,
     "cnbc": 2
 }
+LARGE_PORTFOLIO_FALLBACK_MULTIPLIER = 4
+LARGE_PORTFOLIO_FALLBACK_MIN_SYMBOLS = 20
+LARGE_PORTFOLIO_FALLBACK_TIMEOUT_CAP_SEC = 10
 
 
 ensure_venv()
@@ -973,6 +976,22 @@ def web_search_news(symbol: str, limit: int = 5) -> list[dict]:
     return articles
 
 
+def _resolve_change_percent(quote_data: dict) -> float:
+    """Return numeric change percent with defensive fallbacks."""
+    change = quote_data.get("change_percent")
+    if isinstance(change, (int, float)):
+        return float(change)
+
+    price = quote_data.get("price")
+    prev_close = quote_data.get("prev_close")
+    open_price = quote_data.get("open")
+    if isinstance(price, (int, float)) and isinstance(prev_close, (int, float)) and prev_close:
+        return ((price - prev_close) / prev_close) * 100
+    if isinstance(price, (int, float)) and isinstance(open_price, (int, float)) and open_price:
+        return ((price - open_price) / open_price) * 100
+    return 0.0
+
+
 def get_large_portfolio_news(
     limit: int = 3,
     top_movers_count: int = 10,
@@ -1002,9 +1021,13 @@ def get_large_portfolio_news(
     # Fill missing symbols with openbb, but cap requests to avoid deadline overruns.
     missing = [sym for sym in symbols if sym not in quotes]
     if missing and (time_left(deadline) is None or time_left(deadline) > 0):
-        fallback_limit = max(top_movers_count * 4, 20)
+        # Fetch enough symbols to recover top movers even when some quotes are missing.
+        fallback_limit = max(
+            top_movers_count * LARGE_PORTFOLIO_FALLBACK_MULTIPLIER,
+            LARGE_PORTFOLIO_FALLBACK_MIN_SYMBOLS,
+        )
         fallback_symbols = missing[:fallback_limit]
-        fallback_timeout = min(subprocess_timeout, 10)
+        fallback_timeout = min(subprocess_timeout, LARGE_PORTFOLIO_FALLBACK_TIMEOUT_CAP_SEC)
         fallback_quotes = fetch_market_data(
             fallback_symbols,
             timeout=fallback_timeout,
@@ -1019,22 +1042,10 @@ def get_large_portfolio_news(
     # 2. Identify top movers
     movers = []
     for symbol, data in quotes.items():
-        change = data.get('change_percent')
-        if not isinstance(change, (int, float)):
-            price = data.get('price')
-            prev_close = data.get('prev_close')
-            open_price = data.get('open')
-            if isinstance(price, (int, float)) and isinstance(prev_close, (int, float)) and prev_close:
-                change = ((price - prev_close) / prev_close) * 100
-            elif isinstance(price, (int, float)) and isinstance(open_price, (int, float)) and open_price:
-                change = ((price - open_price) / open_price) * 100
-            else:
-                change = 0.0
+        change = _resolve_change_percent(data)
         movers.append((symbol, change, data))
-    
-    # Sort: Absolute change descending? Or Gainers vs Losers?
-    # Issue says: "Biggest gainers (top 5), Biggest losers (top 5)"
-    
+
+    # Rank movers by signed change, then take strongest gainers and losers.
     movers.sort(key=lambda x: x[1])  # Sort by change ascending
 
     max_each = max(1, top_movers_count // 2)
