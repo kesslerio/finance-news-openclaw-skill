@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -17,6 +18,7 @@ from pathlib import Path
 
 import urllib.parse
 import urllib.request
+from urllib.error import HTTPError, URLError
 from utils import clamp_timeout, compute_deadline, ensure_venv, time_left
 
 ensure_venv()
@@ -900,6 +902,20 @@ def select_top_headline_ids(shortlist: list[dict], deadline: float | None) -> li
     return clean[:TOP_HEADLINES_COUNT]
 
 
+def _build_translation_prompt(titles: list[str]) -> str:
+    """Build the translation prompt for a list of headlines."""
+    prompt_lines = [
+        f"Translate these {len(titles)} English headlines to German.",
+        "Return ONLY a JSON array of strings in the same order.",
+        "Do not add commentary.",
+        "",
+        "Headlines:",
+    ]
+    for idx, title in enumerate(titles, start=1):
+        prompt_lines.append(f"{idx}. {title}")
+    return "\n".join(prompt_lines)
+
+
 def translate_headlines(
     titles: list[str],
     deadline: float | None,
@@ -912,49 +928,149 @@ def translate_headlines(
     if not titles:
         return [], True
 
-    prompt_lines = [
-        "Translate these English headlines to German.",
-        "Return ONLY a JSON array of strings in the same order.",
-        "Example: [\"Übersetzung 1\", \"Übersetzung 2\"]",
-        "Do not add commentary.",
-        "",
-        "Headlines:"
-    ]
-    for idx, title in enumerate(titles, start=1):
-        prompt_lines.append(f"{idx}. {title}")
-    prompt = "\n".join(prompt_lines)
-
     print(f"🔤 Translating {len(titles)} headlines...", file=sys.stderr)
+    translated, success = translate_via_gemini_api(titles, deadline=deadline)
+    if success:
+        print("  ↳ ✅ Translation successful via Gemini API", file=sys.stderr)
+        return translated, True
+
+    print("  ↳ Gemini API failed, falling back to openclaw agent", file=sys.stderr)
+    prompt = _build_translation_prompt(titles)
+
     reply = run_agent_prompt(prompt, deadline=deadline, session_id="finance-news-translate", timeout=60)
 
     if reply.startswith("⚠️"):
         print(f"  ↳ Translation failed: {reply}", file=sys.stderr)
         return titles, False
 
-    # Try to extract JSON from reply (may have markdown wrapper)
-    json_text = reply.strip()
+    data = parse_translation_array(reply)
+    if data is None:
+        print("  ↳ Invalid JSON translation format from openclaw", file=sys.stderr)
+        print(f"     Reply was: {reply[:200]}...", file=sys.stderr)
+        return titles, False
+    if len(data) == len(titles):
+        print("  ↳ ✅ Translation successful via openclaw agent", file=sys.stderr)
+        return data, True
+    print(f"  ↳ Returned {len(data)} items, expected {len(titles)}", file=sys.stderr)
+
+    return titles, False
+
+
+def parse_translation_array(raw_text: str) -> list[str] | None:
+    """Parse a JSON array of translated strings from plain text or markdown."""
+    json_text = raw_text.strip()
     if "```" in json_text:
-        # Extract from markdown code block
-        match = re.search(r'```(?:json)?\s*(.*?)```', json_text, re.DOTALL)
+        match = re.search(r"```(?:json)?\s*(.*?)```", json_text, re.DOTALL)
         if match:
             json_text = match.group(1).strip()
 
     try:
         data = json.loads(json_text)
-    except json.JSONDecodeError as e:
-        print(f"  ↳ JSON error: {e}", file=sys.stderr)
-        print(f"     Reply was: {reply[:200]}...", file=sys.stderr)
-        return titles, False
+    except json.JSONDecodeError:
+        return None
 
     if isinstance(data, list) and all(isinstance(item, str) for item in data):
-        if len(data) == len(titles):
-            print(f"  ↳ ✅ Translation successful", file=sys.stderr)
-            return data, True
-        else:
-            print(f"  ↳ Returned {len(data)} items, expected {len(titles)}", file=sys.stderr)
-    else:
-        print(f"  ↳ Invalid format: {type(data)}", file=sys.stderr)
+        return data
+    return None
 
+
+def _extract_gemini_text(body: dict) -> str | None:
+    """Extract text content from a Gemini API response body."""
+    candidates = body.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return None
+    content = candidates[0].get("content", {})
+    parts = content.get("parts", []) if isinstance(content, dict) else []
+    if not isinstance(parts, list):
+        return None
+    text_parts = [part.get("text", "") for part in parts if isinstance(part, dict)]
+    reply_text = "\n".join([p for p in text_parts if isinstance(p, str)]).strip()
+    return reply_text or None
+
+
+_GEMINI_MAX_RETRIES = 2
+
+
+def translate_via_gemini_api(
+    titles: list[str],
+    deadline: float | None,
+) -> tuple[list[str], bool]:
+    """Translate headlines using Gemini HTTP API with retry on transient errors."""
+    if not titles:
+        return [], True
+
+    api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if not api_key:
+        print("  ↳ GEMINI_API_KEY not set, skipping API translation", file=sys.stderr)
+        return titles, False
+
+    prompt = _build_translation_prompt(titles)
+    payload = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0},
+    }).encode("utf-8")
+
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        "gemini-2.0-flash:generateContent"
+    )
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
+
+    # Scale timeout with headline count: base 5s + 0.5s per headline, max 30s
+    base_timeout = min(30, 5 + len(titles) * 0.5)
+
+    last_error = None
+    for attempt in range(_GEMINI_MAX_RETRIES + 1):
+        req = urllib.request.Request(
+            url=url, data=payload, headers=headers, method="POST",
+        )
+        try:
+            timeout = clamp_timeout(base_timeout, deadline)
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                raw = response.read().decode("utf-8")
+            body = json.loads(raw)
+        except HTTPError as e:
+            last_error = f"HTTP {e.code}"
+            # Retry on 429 (rate limit) and 5xx (server errors)
+            if e.code in (429, 500, 502, 503) and attempt < _GEMINI_MAX_RETRIES:
+                wait = 1.0 * (attempt + 1)
+                print(f"  ↳ Gemini API {last_error}, retrying in {wait}s (attempt {attempt + 1}/{_GEMINI_MAX_RETRIES + 1})", file=sys.stderr)
+                time.sleep(wait)
+                continue
+            print(f"  ↳ Gemini API error: {last_error}", file=sys.stderr)
+            return titles, False
+        except (TimeoutError, URLError, OSError) as e:
+            last_error = f"{type(e).__name__}: {e}"
+            if attempt < _GEMINI_MAX_RETRIES:
+                wait = 1.0 * (attempt + 1)
+                print(f"  ↳ Gemini API {last_error}, retrying in {wait}s", file=sys.stderr)
+                time.sleep(wait)
+                continue
+            print(f"  ↳ Gemini API error after {_GEMINI_MAX_RETRIES + 1} attempts: {last_error}", file=sys.stderr)
+            return titles, False
+        except json.JSONDecodeError as e:
+            print(f"  ↳ Gemini API returned invalid JSON: {e}", file=sys.stderr)
+            return titles, False
+
+        reply_text = _extract_gemini_text(body)
+        if not reply_text:
+            print("  ↳ Gemini API returned empty response", file=sys.stderr)
+            return titles, False
+
+        translated = parse_translation_array(reply_text)
+        if translated is None:
+            print(f"  ↳ Gemini API returned unparseable translation: {reply_text[:200]}", file=sys.stderr)
+            return titles, False
+        if len(translated) != len(titles):
+            print(f"  ↳ Gemini API returned {len(translated)} items, expected {len(titles)}", file=sys.stderr)
+            return titles, False
+        return translated, True
+
+    # Should not reach here, but safety net
+    print(f"  ↳ Gemini API exhausted retries: {last_error}", file=sys.stderr)
     return titles, False
 
 
