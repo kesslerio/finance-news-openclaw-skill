@@ -17,6 +17,7 @@ from pathlib import Path
 
 import urllib.parse
 import urllib.request
+from urllib.error import HTTPError, URLError
 from utils import clamp_timeout, compute_deadline, ensure_venv, time_left
 
 ensure_venv()
@@ -912,6 +913,13 @@ def translate_headlines(
     if not titles:
         return [], True
 
+    print(f"🔤 Translating {len(titles)} headlines...", file=sys.stderr)
+    translated, success = translate_via_gemini_api(titles, deadline=deadline)
+    if success:
+        print("  ↳ ✅ Translation successful via Gemini API", file=sys.stderr)
+        return translated, True
+
+    print("  ↳ Gemini API failed, falling back to openclaw agent", file=sys.stderr)
     prompt_lines = [
         "Translate these English headlines to German.",
         "Return ONLY a JSON array of strings in the same order.",
@@ -924,38 +932,108 @@ def translate_headlines(
         prompt_lines.append(f"{idx}. {title}")
     prompt = "\n".join(prompt_lines)
 
-    print(f"🔤 Translating {len(titles)} headlines...", file=sys.stderr)
     reply = run_agent_prompt(prompt, deadline=deadline, session_id="finance-news-translate", timeout=60)
 
     if reply.startswith("⚠️"):
         print(f"  ↳ Translation failed: {reply}", file=sys.stderr)
         return titles, False
 
-    # Try to extract JSON from reply (may have markdown wrapper)
-    json_text = reply.strip()
+    data = parse_translation_array(reply)
+    if data is None:
+        print("  ↳ Invalid JSON translation format from openclaw", file=sys.stderr)
+        print(f"     Reply was: {reply[:200]}...", file=sys.stderr)
+        return titles, False
+    if len(data) == len(titles):
+        print("  ↳ ✅ Translation successful via openclaw agent", file=sys.stderr)
+        return data, True
+    print(f"  ↳ Returned {len(data)} items, expected {len(titles)}", file=sys.stderr)
+
+    return titles, False
+
+
+def parse_translation_array(raw_text: str) -> list[str] | None:
+    """Parse a JSON array of translated strings from plain text or markdown."""
+    json_text = raw_text.strip()
     if "```" in json_text:
-        # Extract from markdown code block
-        match = re.search(r'```(?:json)?\s*(.*?)```', json_text, re.DOTALL)
+        match = re.search(r"```(?:json)?\s*(.*?)```", json_text, re.DOTALL)
         if match:
             json_text = match.group(1).strip()
 
     try:
         data = json.loads(json_text)
-    except json.JSONDecodeError as e:
-        print(f"  ↳ JSON error: {e}", file=sys.stderr)
-        print(f"     Reply was: {reply[:200]}...", file=sys.stderr)
-        return titles, False
+    except json.JSONDecodeError:
+        return None
 
     if isinstance(data, list) and all(isinstance(item, str) for item in data):
-        if len(data) == len(titles):
-            print(f"  ↳ ✅ Translation successful", file=sys.stderr)
-            return data, True
-        else:
-            print(f"  ↳ Returned {len(data)} items, expected {len(titles)}", file=sys.stderr)
-    else:
-        print(f"  ↳ Invalid format: {type(data)}", file=sys.stderr)
+        return data
+    return None
 
-    return titles, False
+
+def translate_via_gemini_api(
+    titles: list[str],
+    deadline: float | None,
+) -> tuple[list[str], bool]:
+    """Translate headlines using Gemini HTTP API."""
+    if not titles:
+        return [], True
+
+    api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if not api_key:
+        return titles, False
+
+    prompt_lines = [
+        f"Translate these {len(titles)} English headlines to German.",
+        "Return ONLY a JSON array of strings in the same order.",
+        "Do not add commentary.",
+        "",
+        "Headlines:",
+    ]
+    for idx, title in enumerate(titles, start=1):
+        prompt_lines.append(f"{idx}. {title}")
+    prompt = "\n".join(prompt_lines)
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0,
+        },
+    }
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        "gemini-2.0-flash:generateContent?"
+        + urllib.parse.urlencode({"key": api_key})
+    )
+    req = urllib.request.Request(
+        url=url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        timeout = clamp_timeout(15, deadline)
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+        body = json.loads(raw)
+    except (TimeoutError, HTTPError, URLError, json.JSONDecodeError, OSError):
+        return titles, False
+
+    candidates = body.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return titles, False
+    content = candidates[0].get("content", {})
+    parts = content.get("parts", []) if isinstance(content, dict) else []
+    if not isinstance(parts, list):
+        return titles, False
+    text_parts = [part.get("text", "") for part in parts if isinstance(part, dict)]
+    reply_text = "\n".join([part for part in text_parts if isinstance(part, str)]).strip()
+    if not reply_text:
+        return titles, False
+
+    translated = parse_translation_array(reply_text)
+    if translated is None or len(translated) != len(titles):
+        return titles, False
+    return translated, True
 
 
 def translate_headline_items(headlines: list[dict], deadline: float | None) -> bool:

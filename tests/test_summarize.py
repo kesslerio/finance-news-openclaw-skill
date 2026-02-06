@@ -1,4 +1,5 @@
 """Tests for summarize helpers."""
+import json
 import sys
 from pathlib import Path
 
@@ -28,6 +29,74 @@ class FixedDateTime(datetime):
     @classmethod
     def now(cls, tz=None):
         return cls(2026, 1, 1, 15, 0)
+
+
+class _FakeUrlopenResponse:
+    def __init__(self, payload: dict):
+        self._raw = json.dumps(payload).encode("utf-8")
+
+    def read(self):
+        return self._raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def test_translate_via_gemini_api_parses_markdown_json(monkeypatch):
+    payload = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"text": "```json\n[\"Titel A\", \"Titel B\"]\n```"}
+                    ]
+                }
+            }
+        ]
+    }
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        summarize.urllib.request,
+        "urlopen",
+        lambda req, timeout=0: _FakeUrlopenResponse(payload),
+    )
+
+    translated, success = summarize.translate_via_gemini_api(["Title A", "Title B"], deadline=None)
+    assert success is True
+    assert translated == ["Titel A", "Titel B"]
+
+
+def test_translate_headlines_uses_gemini_api_first(monkeypatch):
+    monkeypatch.setattr(
+        summarize,
+        "translate_via_gemini_api",
+        lambda titles, deadline: (["Titel"], True),
+    )
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("run_agent_prompt should not be called when Gemini API succeeds")
+
+    monkeypatch.setattr(summarize, "run_agent_prompt", fail_if_called)
+
+    translated, success = summarize.translate_headlines(["Title"], deadline=None)
+    assert success is True
+    assert translated == ["Titel"]
+
+
+def test_translate_headlines_falls_back_to_openclaw(monkeypatch):
+    monkeypatch.setattr(
+        summarize,
+        "translate_via_gemini_api",
+        lambda titles, deadline: (titles, False),
+    )
+    monkeypatch.setattr(summarize, "run_agent_prompt", lambda *_a, **_k: "[\"Titel\"]")
+
+    translated, success = summarize.translate_headlines(["Title"], deadline=None)
+    assert success is True
+    assert translated == ["Titel"]
 
 
 def test_validate_briefing_structure_success():
