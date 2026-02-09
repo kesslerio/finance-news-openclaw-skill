@@ -51,7 +51,7 @@ finance-news briefing --morning --lang de --fast --deadline 300
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `FINANCE_NEWS_TARGET` | Delivery target (WhatsApp JID, group name, or Telegram chat ID) | `120363421796203667@g.us` |
+| `FINANCE_NEWS_TARGET` | Delivery target (WhatsApp JID, group name, or Telegram chat ID) | *Required* |
 | `FINANCE_NEWS_CHANNEL` | Delivery channel | `whatsapp` or `telegram` |
 | `SKILL_DIR` | Path to skill directory (for Lobster) | `$HOME/projects/finance-news-openclaw-skill` |
 
