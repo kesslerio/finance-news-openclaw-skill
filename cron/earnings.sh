@@ -8,8 +8,8 @@
 set -e
 
 export SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export FINANCE_NEWS_TARGET="${FINANCE_NEWS_TARGET:-120363421796203667@g.us}"
-export FINANCE_NEWS_CHANNEL="${FINANCE_NEWS_CHANNEL:-whatsapp}"
+export FINANCE_NEWS_TARGET="${FINANCE_NEWS_TARGET:?FINANCE_NEWS_TARGET must be set}"
+export FINANCE_NEWS_CHANNEL="${FINANCE_NEWS_CHANNEL:?FINANCE_NEWS_CHANNEL must be set}"
 
 echo "[$(date)] Checking today's earnings via Lobster..."
 
