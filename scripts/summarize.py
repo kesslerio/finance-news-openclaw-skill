@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 News Summarizer - Generate AI summaries of market news in configurable language.
-Uses Gemini CLI for summarization and translation.
+Uses MiniMax M2.5 for summarization and translation.
 """
 
 import argparse
@@ -34,7 +34,7 @@ PORTFOLIO_MOVER_MAX = 8
 PORTFOLIO_MOVER_MIN_ABS_CHANGE = 1.0
 MAX_HEADLINES_IN_PROMPT = 10
 TOP_HEADLINES_COUNT = 5
-DEFAULT_LLM_FALLBACK = ["gemini", "minimax", "claude"]
+DEFAULT_LLM_FALLBACK = ["minimax", "minimax-direct", "claude"]
 HEADLINE_SHORTLIST_SIZE = 20
 HEADLINE_MERGE_THRESHOLD = 0.82
 HEADLINE_MAX_AGE_HOURS = 72
@@ -50,7 +50,7 @@ INTL_TICKER_NAME_OVERRIDES = {
     "8411.T": "Mizuho Financial",
 }
 
-SUPPORTED_MODELS = {"gemini", "minimax", "claude"}
+SUPPORTED_MODELS = {"minimax", "minimax-direct", "claude"}
 
 # Portfolio prioritization weights
 PORTFOLIO_PRIORITY_WEIGHTS = {
@@ -929,12 +929,12 @@ def translate_headlines(
         return [], True
 
     print(f"🔤 Translating {len(titles)} headlines...", file=sys.stderr)
-    translated, success = translate_via_gemini_api(titles, deadline=deadline)
+    translated, success = translate_via_minimax_api(titles, deadline=deadline)
     if success:
-        print("  ↳ ✅ Translation successful via Gemini API", file=sys.stderr)
+        print("  ↳ ✅ Translation successful via MiniMax API", file=sys.stderr)
         return translated, True
 
-    print("  ↳ Gemini API failed, falling back to openclaw agent", file=sys.stderr)
+    print("  ↳ MiniMax API failed, falling back to openclaw agent", file=sys.stderr)
     prompt = _build_translation_prompt(titles)
 
     reply = run_agent_prompt(prompt, deadline=deadline, session_id="finance-news-translate", timeout=60)
@@ -974,56 +974,55 @@ def parse_translation_array(raw_text: str) -> list[str] | None:
     return None
 
 
-def _extract_gemini_text(body: dict) -> str | None:
-    """Extract text content from a Gemini API response body."""
-    candidates = body.get("candidates")
-    if not isinstance(candidates, list) or not candidates:
+def _extract_minimax_text(body: dict) -> str | None:
+    """Extract text content from a MiniMax Anthropic API response body."""
+    content = body.get("content", [])
+    if not isinstance(content, list):
         return None
-    content = candidates[0].get("content", {})
-    parts = content.get("parts", []) if isinstance(content, dict) else []
-    if not isinstance(parts, list):
-        return None
-    text_parts = [part.get("text", "") for part in parts if isinstance(part, dict)]
+    text_parts = [
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    ]
     reply_text = "\n".join([p for p in text_parts if isinstance(p, str)]).strip()
     return reply_text or None
 
 
-_GEMINI_MAX_RETRIES = 2
+_MINIMAX_MAX_RETRIES = 2
 
 
-def translate_via_gemini_api(
+def translate_via_minimax_api(
     titles: list[str],
     deadline: float | None,
 ) -> tuple[list[str], bool]:
-    """Translate headlines using Gemini HTTP API with retry on transient errors."""
+    """Translate headlines using MiniMax Anthropic API with retry on transient errors."""
     if not titles:
         return [], True
 
-    api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    api_key = (os.getenv("MINIMAX_CODING_PLAN_API_KEY") or "").strip()
     if not api_key:
-        print("  ↳ GEMINI_API_KEY not set, skipping API translation", file=sys.stderr)
+        print("  ↳ MINIMAX_CODING_PLAN_API_KEY not set, skipping API translation", file=sys.stderr)
         return titles, False
 
     prompt = _build_translation_prompt(titles)
     payload = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0},
+        "model": "MiniMax-M2.5",
+        "max_tokens": 4096,
+        "messages": [{"role": "user", "content": prompt}],
     }).encode("utf-8")
 
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        "gemini-2.0-flash:generateContent"
-    )
+    url = "https://api.minimax.io/anthropic/v1/messages"
     headers = {
         "Content-Type": "application/json",
-        "x-goog-api-key": api_key,
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
     }
 
     # Scale timeout with headline count: base 5s + 0.5s per headline, max 30s
     base_timeout = min(30, 5 + len(titles) * 0.5)
 
     last_error = None
-    for attempt in range(_GEMINI_MAX_RETRIES + 1):
+    for attempt in range(_MINIMAX_MAX_RETRIES + 1):
         req = urllib.request.Request(
             url=url, data=payload, headers=headers, method="POST",
         )
@@ -1034,43 +1033,41 @@ def translate_via_gemini_api(
             body = json.loads(raw)
         except HTTPError as e:
             last_error = f"HTTP {e.code}"
-            # Retry on 429 (rate limit) and 5xx (server errors)
-            if e.code in (429, 500, 502, 503) and attempt < _GEMINI_MAX_RETRIES:
+            if e.code in (429, 500, 502, 503) and attempt < _MINIMAX_MAX_RETRIES:
                 wait = 1.0 * (attempt + 1)
-                print(f"  ↳ Gemini API {last_error}, retrying in {wait}s (attempt {attempt + 1}/{_GEMINI_MAX_RETRIES + 1})", file=sys.stderr)
+                print(f"  ↳ MiniMax API {last_error}, retrying in {wait}s (attempt {attempt + 1}/{_MINIMAX_MAX_RETRIES + 1})", file=sys.stderr)
                 time.sleep(wait)
                 continue
-            print(f"  ↳ Gemini API error: {last_error}", file=sys.stderr)
+            print(f"  ↳ MiniMax API error: {last_error}", file=sys.stderr)
             return titles, False
         except (TimeoutError, URLError, OSError) as e:
             last_error = f"{type(e).__name__}: {e}"
-            if attempt < _GEMINI_MAX_RETRIES:
+            if attempt < _MINIMAX_MAX_RETRIES:
                 wait = 1.0 * (attempt + 1)
-                print(f"  ↳ Gemini API {last_error}, retrying in {wait}s", file=sys.stderr)
+                print(f"  ↳ MiniMax API {last_error}, retrying in {wait}s", file=sys.stderr)
                 time.sleep(wait)
                 continue
-            print(f"  ↳ Gemini API error after {_GEMINI_MAX_RETRIES + 1} attempts: {last_error}", file=sys.stderr)
+            print(f"  ↳ MiniMax API error after {_MINIMAX_MAX_RETRIES + 1} attempts: {last_error}", file=sys.stderr)
             return titles, False
         except json.JSONDecodeError as e:
-            print(f"  ↳ Gemini API returned invalid JSON: {e}", file=sys.stderr)
+            print(f"  ↳ MiniMax API returned invalid JSON: {e}", file=sys.stderr)
             return titles, False
 
-        reply_text = _extract_gemini_text(body)
+        reply_text = _extract_minimax_text(body)
         if not reply_text:
-            print("  ↳ Gemini API returned empty response", file=sys.stderr)
+            print("  ↳ MiniMax API returned empty response", file=sys.stderr)
             return titles, False
 
         translated = parse_translation_array(reply_text)
         if translated is None:
-            print(f"  ↳ Gemini API returned unparseable translation: {reply_text[:200]}", file=sys.stderr)
+            print(f"  ↳ MiniMax API returned unparseable translation: {reply_text[:200]}", file=sys.stderr)
             return titles, False
         if len(translated) != len(titles):
-            print(f"  ↳ Gemini API returned {len(translated)} items, expected {len(titles)}", file=sys.stderr)
+            print(f"  ↳ MiniMax API returned {len(translated)} items, expected {len(titles)}", file=sys.stderr)
             return titles, False
         return translated, True
 
-    # Should not reach here, but safety net
-    print(f"  ↳ Gemini API exhausted retries: {last_error}", file=sys.stderr)
+    print(f"  ↳ MiniMax API exhausted retries: {last_error}", file=sys.stderr)
     return titles, False
 
 
@@ -1200,14 +1197,14 @@ Use only the following information for the briefing:
     return f"⚠️ MiniMax briefing error: {stderr}"
 
 
-def summarize_with_gemini(
+def summarize_with_minimax_direct(
     content: str,
     language: str = "de",
     style: str = "briefing",
     deadline: float | None = None,
 ) -> str:
-    """Generate AI summary using Gemini CLI."""
-    
+    """Generate AI summary using MiniMax M2.5 Anthropic API directly (no CLI dependency)."""
+
     prompt = f"""{STYLE_PROMPTS.get(style, STYLE_PROMPTS['briefing'])}
 
 {LANG_PROMPTS.get(language, LANG_PROMPTS['de'])}
@@ -1216,30 +1213,45 @@ Here are the current market items:
 
 {content}
 """
-    
-    try:
-        proc_timeout = clamp_timeout(60, deadline)
-        result = subprocess.run(
-            ['gemini', prompt],
-            capture_output=True,
-            text=True,
-            timeout=proc_timeout
-        )
 
-        if result.returncode == 0:
-            reply = result.stdout.strip()
-            # Add financial disclaimer
-            reply += format_disclaimer(language)
-            return reply
-        else:
-            return f"⚠️ Gemini error: {result.stderr}"
-    
-    except subprocess.TimeoutExpired:
-        return "⚠️ Gemini timeout"
-    except TimeoutError:
-        return "⚠️ Gemini timeout: deadline exceeded"
-    except FileNotFoundError:
-        return "⚠️ Gemini CLI not found. Install: brew install gemini-cli"
+    api_key = (os.getenv("MINIMAX_CODING_PLAN_API_KEY") or "").strip()
+    if not api_key:
+        return "⚠️ MiniMax direct error: MINIMAX_CODING_PLAN_API_KEY not set"
+
+    payload = json.dumps({
+        "model": "MiniMax-M2.5",
+        "max_tokens": 8192,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode("utf-8")
+
+    url = "https://api.minimax.io/anthropic/v1/messages"
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+    }
+
+    try:
+        timeout = clamp_timeout(60, deadline)
+        req = urllib.request.Request(
+            url=url, data=payload, headers=headers, method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+        body = json.loads(raw)
+    except HTTPError as e:
+        return f"⚠️ MiniMax direct error: HTTP {e.code}"
+    except (TimeoutError, URLError, OSError) as e:
+        return f"⚠️ MiniMax direct error: {e}"
+    except json.JSONDecodeError as e:
+        return f"⚠️ MiniMax direct error: invalid JSON: {e}"
+
+    reply_text = _extract_minimax_text(body)
+    if not reply_text:
+        return "⚠️ MiniMax direct error: empty response"
+
+    reply_text += format_disclaimer(language)
+    return reply_text
 
 
 def format_market_data(market_data: dict) -> str:
@@ -1891,8 +1903,8 @@ def generate_briefing(args):
         for candidate in summary_list:
             if candidate == "minimax":
                 summary = summarize_with_minimax(content, language, args.style, deadline=deadline)
-            elif candidate == "gemini":
-                summary = summarize_with_gemini(content, language, args.style, deadline=deadline)
+            elif candidate == "minimax-direct":
+                summary = summarize_with_minimax_direct(content, language, args.style, deadline=deadline)
             else:
                 summary = summarize_with_claude(content, language, args.style, deadline=deadline)
 

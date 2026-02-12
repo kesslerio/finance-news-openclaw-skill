@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Research Module - Deep research using Gemini CLI.
+Research Module - Deep research using MiniMax M2.5 (via minimax-prompt CLI).
 Crawls articles, finds correlations, researches companies.
 Outputs research_report.md for later analysis.
 """
@@ -80,12 +80,12 @@ def format_portfolio_news(portfolio_data: dict) -> str:
     return '\n'.join(lines)
 
 
-def gemini_available() -> bool:
-    return shutil.which('gemini') is not None
+def minimax_prompt_available() -> bool:
+    return shutil.which('minimax-prompt') is not None
 
 
-def research_with_gemini(content: str, focus_areas: list = None) -> str:
-    """Perform deep research using Gemini CLI.
+def research_with_minimax(content: str, focus_areas: list = None) -> str:
+    """Perform deep research using minimax-prompt CLI (MiniMax M2.5 direct API).
     
     Args:
         content: Combined market/headlines/portfolio content
@@ -136,21 +136,21 @@ Deliver a substantial report (500-800 words).
 
     try:
         result = subprocess.run(
-            ['gemini', prompt],
+            ['minimax-prompt', prompt],
             capture_output=True,
             text=True,
             timeout=120
         )
-        
+
         if result.returncode == 0:
             return result.stdout.strip()
         else:
-            return f"⚠️ Gemini research error: {result.stderr}"
-    
+            return f"⚠️ MiniMax research error: {result.stderr}"
+
     except subprocess.TimeoutExpired:
-        return "⚠️ Gemini research timeout"
+        return "⚠️ MiniMax research timeout"
     except FileNotFoundError:
-        return "⚠️ Gemini CLI not found. Install: brew install gemini-cli"
+        return "⚠️ minimax-prompt not found"
 
 
 def format_raw_data_report(market_data: dict, portfolio_data: dict) -> str:
@@ -171,10 +171,10 @@ def generate_research_content(market_data: dict, portfolio_data: dict, focus_are
             'report': '',
             'source': 'none'
         }
-    if gemini_available():
+    if minimax_prompt_available():
         return {
-            'report': research_with_gemini(raw_report, focus_areas),
-            'source': 'gemini'
+            'report': research_with_minimax(raw_report, focus_areas),
+            'source': 'minimax'
         }
     return {
         'report': raw_report,
@@ -224,10 +224,10 @@ def generate_research_report(args):
         print("⚠️ No data available for research", file=sys.stderr)
         return
 
-    if source == 'gemini':
-        print("🔬 Running deep research with Gemini...", file=sys.stderr)
+    if source == 'minimax':
+        print("🔬 Running deep research with MiniMax...", file=sys.stderr)
     else:
-        print("🧾 Gemini not available; using raw data report", file=sys.stderr)
+        print("🧾 MiniMax not available; using raw data report", file=sys.stderr)
     
     # Add metadata header
     timestamp = datetime.now().isoformat()

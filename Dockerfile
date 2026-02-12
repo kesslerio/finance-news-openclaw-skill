@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-ENV GEMINI_API_KEY=
+ENV MINIMAX_CODING_PLAN_API_KEY=
 
 # Default command (override via docker run args)
 CMD ["python3", "scripts/briefing.py"]

@@ -155,8 +155,8 @@ def main():
     parser.add_argument('--deadline', type=int, default=None,
                         help='Overall deadline in seconds')
     parser.add_argument('--llm', action='store_true', help='Use LLM summary')
-    parser.add_argument('--model', choices=['claude', 'minimax', 'gemini'],
-                        default='claude', help='LLM model (only with --llm)')
+    parser.add_argument('--model', choices=['claude', 'minimax', 'minimax-direct'],
+                        default='minimax', help='LLM model (only with --llm)')
     parser.add_argument('--fast', action='store_true',
                         help='Use fast mode (shorter timeouts, fewer items)')
     parser.add_argument('--debug', action='store_true',
