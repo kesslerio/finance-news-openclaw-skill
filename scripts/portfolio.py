@@ -5,10 +5,27 @@ Portfolio Manager - CRUD operations for stock watchlist.
 
 import argparse
 import csv
+import os
 import sys
 from pathlib import Path
 
-PORTFOLIO_FILE = Path(__file__).parent.parent / "config" / "portfolio.csv"
+
+def _get_portfolio_file() -> Path:
+    """Get portfolio CSV path with PORTFOLIOS_DIR env var support.
+
+    Priority:
+    1. Shared location ($PORTFOLIOS_DIR/watchlists/portfolio.csv) if env var set
+    2. Legacy config/portfolio.csv (backward compatibility)
+    """
+    env_dir = os.environ.get("PORTFOLIOS_DIR", "").strip()
+    if env_dir:
+        # If env var is set, always use shared path (even if file doesn't exist yet)
+        return Path(os.path.expanduser(env_dir)) / "watchlists" / "portfolio.csv"
+    # Fallback to legacy path
+    return Path(__file__).parent.parent / "config" / "portfolio.csv"
+
+
+PORTFOLIO_FILE = _get_portfolio_file()
 REQUIRED_COLUMNS = ['symbol', 'name']
 DEFAULT_COLUMNS = ['symbol', 'name', 'category', 'notes', 'type']
 
@@ -111,6 +128,9 @@ def load_portfolio() -> list[dict]:
 
 def save_portfolio(portfolio: list[dict]):
     """Save portfolio to CSV."""
+    # Ensure parent directory exists (needed for shared portfolio location)
+    PORTFOLIO_FILE.parent.mkdir(parents=True, exist_ok=True)
+    
     if not portfolio:
         PORTFOLIO_FILE.write_text("symbol,name,category,notes,type\n")
         return
