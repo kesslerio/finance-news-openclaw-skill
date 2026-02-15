@@ -30,7 +30,24 @@ from urllib.error import URLError, HTTPError
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_DIR = SCRIPT_DIR.parent / "config"
 CACHE_DIR = SCRIPT_DIR.parent / "cache"
-PORTFOLIO_FILE = CONFIG_DIR / "portfolio.csv"
+
+
+def _get_portfolio_file() -> Path:
+    """Get portfolio CSV path with PORTFOLIOS_DIR env var support.
+
+    Priority:
+    1. Shared location ($PORTFOLIOS_DIR/watchlists/portfolio.csv) if env var set
+    2. Legacy config/portfolio.csv (backward compatibility)
+    """
+    env_dir = os.environ.get("PORTFOLIOS_DIR", "").strip()
+    if env_dir:
+        # If env var is set, always use shared path (even if file doesn't exist yet)
+        return Path(os.path.expanduser(env_dir)) / "watchlists" / "portfolio.csv"
+    # Fallback to legacy path
+    return CONFIG_DIR / "portfolio.csv"
+
+
+PORTFOLIO_FILE = _get_portfolio_file()
 EARNINGS_CACHE = CACHE_DIR / "earnings_calendar.json"
 MANUAL_EARNINGS = CONFIG_DIR / "manual_earnings.json"  # For JP/other stocks not in Finnhub
 
