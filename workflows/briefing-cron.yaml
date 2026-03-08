@@ -42,6 +42,9 @@ steps:
       fi
       docker run --rm \
         --workdir /app \
+        -e KIMI_API_KEY \
+        -e KIMI_API_BASE_URL \
+        -e FINANCE_NEWS_KIMI_MODEL \
         -v "$SKILL_DIR/config:/app/config:ro" \
         -v "$SKILL_DIR/scripts:/app/scripts:ro" \
         $OPENBB_MOUNT \
@@ -68,15 +71,24 @@ steps:
     stdin: $generate.stdout
     description: Translate portfolio headlines via openclaw
 
-  # Validate deterministic structured macro output before sending
+  # Validate structured macro output before sending
   - id: validate
     command: |
       OUTFILE=$(cat)
       OUTFILE=$(echo "$OUTFILE" | tr -d '\n')
-      MODE=$(jq -r '.summary_mode // "unknown"' "$OUTFILE")
+      MODEL_USED=$(jq -r '.summary_model_used // "unknown"' "$OUTFILE")
       STRUCT_OK=$(jq -r '.summary_structure_ok // false' "$OUTFILE")
 
-      if [ "$MODE" != "deterministic" ] || [ "$STRUCT_OK" != "true" ]; then
+      case "$MODEL_USED" in
+        kimi) ;;
+        *)
+          echo "❌ Refusing to send briefing from unsupported writer"
+          jq '{summary_mode, summary_model_used, summary_structure_ok, summary_missing_sections, generator}' "$OUTFILE"
+          exit 1
+          ;;
+      esac
+
+      if [ "$STRUCT_OK" != "true" ]; then
         echo "❌ Refusing to send malformed macro briefing"
         jq '{summary_mode, summary_model_used, summary_structure_ok, summary_missing_sections, generator}' "$OUTFILE"
         exit 1
@@ -84,7 +96,7 @@ steps:
 
       echo "$OUTFILE"
     stdin: $translate.stdout
-    description: Validate deterministic structured output
+    description: Validate structured output and writer
 
   # Send macro briefing (market overview) - NO APPROVAL GATE
   - id: send_macro

@@ -355,12 +355,32 @@ def test_generate_briefing_auto_time_evening(capsys, monkeypatch):
         }
 
     def fake_summary(*_args, **_kwargs):
-        return "OK"
+        return """## Märkte
+
+Alles ruhig.
+
+## Stimmung
+
+Neutral.
+
+## Top-Themen
+
+- Headline one
+- Headline two
+
+## Portfolio-Auswirkungen
+
+Beobachten.
+
+## Beobachtungspunkte
+
+- Watch one"""
 
     monkeypatch.setattr(summarize, "get_market_news", fake_market_news)
     monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
-    monkeypatch.setattr(summarize, "summarize_with_claude", fake_summary)
+    monkeypatch.setattr(summarize, "summarize_with_kimi", fake_summary)
+    monkeypatch.setattr(summarize, "validate_briefing_structure", lambda *_a, **_k: (True, []))
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
 
     args = type(
@@ -370,7 +390,7 @@ def test_generate_briefing_auto_time_evening(capsys, monkeypatch):
             "lang": "de",
             "style": "briefing",
             "time": None,
-            "model": "claude",
+            "model": "kimi",
             "json": False,
             "research": False,
             "deadline": None,
@@ -383,6 +403,250 @@ def test_generate_briefing_auto_time_evening(capsys, monkeypatch):
     summarize.generate_briefing(args)
     stdout = capsys.readouterr().out
     assert "Börsen Abend-Briefing" in stdout
+
+
+def test_summarize_with_kimi_uses_localized_briefing_headings(monkeypatch):
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps({"content": [{"type": "text", "text": "### Märkte\n\nAlles ruhig."}]}).encode('utf-8')
+
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["json"] = json.loads(req.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setenv("KIMI_API_KEY", "test-key")
+    monkeypatch.setattr(summarize.urllib.request, "urlopen", fake_urlopen)
+
+    summary = summarize.summarize_with_kimi("Raw content", language="de", style="briefing", deadline=None)
+    prompt = captured["json"]["messages"][0]["content"]
+    assert "### Märkte" in prompt
+    assert "### Sentiment" not in prompt
+    assert summary.startswith("### Märkte")
+
+
+def test_summarize_with_kimi_success(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(req, timeout=0):
+        captured["url"] = req.full_url
+        captured["timeout"] = timeout
+        captured["headers"] = dict(req.header_items())
+        payload = {
+            "content": [
+                {"type": "text", "text": "## Market Briefing\n\nKimi summary body"}
+            ]
+        }
+        return _FakeUrlopenResponse(payload)
+
+    monkeypatch.setenv("KIMI_API_KEY", "test-key")
+    monkeypatch.setenv("KIMI_API_BASE_URL", "https://api.kimi.com/coding/")
+    monkeypatch.setenv("FINANCE_NEWS_KIMI_MODEL", "k2p5")
+    monkeypatch.setattr(summarize.urllib.request, "urlopen", fake_urlopen)
+
+    summary = summarize.summarize_with_kimi("Raw content", language="en", style="briefing", deadline=None)
+    assert "Kimi summary body" in summary
+    assert "informational purposes only" in summary
+    assert captured["url"] == "https://api.kimi.com/coding/v1/messages"
+    assert captured["headers"]["X-api-key"] == "test-key"
+    assert captured["headers"]["Anthropic-version"] == "2023-06-01"
+
+
+def test_summarize_with_kimi_missing_key(monkeypatch):
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+    summary = summarize.summarize_with_kimi("Raw content", language="en", style="briefing", deadline=None)
+    assert summary == "⚠️ Kimi briefing error: KIMI_API_KEY not set"
+
+
+def test_generate_briefing_deadline_uses_deterministic_fallback(capsys, monkeypatch):
+    def fake_market_news(*_args, **_kwargs):
+        return {
+            "headlines": [{"source": "CNBC", "title": "Headline one", "link": "https://example.com/1"}],
+            "markets": {"us": {"name": "US Markets", "indices": {"^GSPC": {"name": "S&P 500", "data": {"price": 100, "change_percent": 1.0}}}}},
+        }
+
+    monkeypatch.setattr(summarize, "get_market_news", fake_market_news)
+    monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
+    monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
+    monkeypatch.setattr(summarize, "datetime", FixedDateTime)
+
+    args = type(
+        "Args",
+        (),
+        {
+            "lang": "de",
+            "style": "briefing",
+            "time": None,
+            "model": "kimi",
+            "json": True,
+            "research": False,
+            "deadline": 0.0,
+            "fast": False,
+            "llm": True,
+            "debug": False,
+        },
+    )()
+
+    summarize.generate_briefing(args)
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["summary_mode"] == "deterministic"
+    assert payload["summary_model_used"] == "deterministic_deadline_fallback"
+
+
+def test_generate_briefing_hard_fails_when_kimi_key_missing(monkeypatch):
+    def fake_market_news(*_args, **_kwargs):
+        return {
+            "headlines": [
+                {"source": "CNBC", "title": "Headline one", "link": "https://example.com/1"},
+                {"source": "Yahoo", "title": "Headline two", "link": "https://example.com/2"},
+                {"source": "CNBC", "title": "Headline three", "link": "https://example.com/3"},
+            ],
+            "markets": {
+                "us": {
+                    "name": "US Markets",
+                    "indices": {
+                        "^GSPC": {"name": "S&P 500", "data": {"price": 100, "change_percent": 1.0}},
+                    },
+                }
+            },
+        }
+
+    monkeypatch.setattr(summarize, "get_market_news", fake_market_news)
+    monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
+    monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
+    monkeypatch.setattr(summarize, "datetime", FixedDateTime)
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+
+    args = type(
+        "Args",
+        (),
+        {
+            "lang": "en",
+            "style": "briefing",
+            "time": None,
+            "model": "kimi",
+            "json": True,
+            "research": False,
+            "deadline": None,
+            "fast": False,
+            "llm": False,
+            "debug": False,
+        },
+    )()
+
+    import pytest
+    with pytest.raises(RuntimeError, match="KIMI_API_KEY not set"):
+        summarize.generate_briefing(args)
+
+
+def test_generate_analysis_uses_claude_when_kimi_unavailable(monkeypatch, capsys):
+    def fake_market_news(*_args, **_kwargs):
+        return {
+            "headlines": [
+                {"source": "CNBC", "title": "Headline one", "link": "https://example.com/1"},
+            ],
+            "markets": {
+                "us": {
+                    "name": "US Markets",
+                    "indices": {
+                        "^GSPC": {"name": "S&P 500", "data": {"price": 100, "change_percent": 1.0}},
+                    },
+                }
+            },
+        }
+
+    monkeypatch.setattr(summarize, "get_market_news", fake_market_news)
+    monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
+    monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
+    monkeypatch.setattr(summarize, "datetime", FixedDateTime)
+    monkeypatch.setattr(summarize, "summarize_with_kimi", lambda *_a, **_k: "⚠️ Kimi briefing error: KIMI_API_KEY not set")
+
+    args = type(
+        "Args",
+        (),
+        {
+            "lang": "en",
+            "style": "analysis",
+            "time": None,
+            "model": "kimi",
+            "json": True,
+            "research": False,
+            "deadline": None,
+            "fast": False,
+            "llm": False,
+            "debug": False,
+        },
+    )()
+
+    monkeypatch.setattr(summarize, "summarize_with_claude", lambda *_a, **_k: "## Analysis\n\nClaude analysis body")
+    summarize.generate_briefing(args)
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["summary_mode"] == "llm"
+    assert payload["summary_model_used"] == "claude"
+    assert "Claude analysis body" in payload["summary"]
+
+
+def test_generate_analysis_uses_kimi_even_without_llm_flag(capsys, monkeypatch):
+    def fake_market_news(*_args, **_kwargs):
+        return {
+            "headlines": [
+                {"source": "CNBC", "title": "Headline one", "link": "https://example.com/1"},
+                {"source": "Yahoo", "title": "Headline two", "link": "https://example.com/2"},
+            ],
+            "markets": {
+                "us": {
+                    "name": "US Markets",
+                    "indices": {
+                        "^GSPC": {"name": "S&P 500", "data": {"price": 100, "change_percent": 1.0}},
+                    },
+                }
+            },
+        }
+
+    monkeypatch.setattr(summarize, "get_market_news", fake_market_news)
+    monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
+    monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
+    monkeypatch.setattr(summarize, "datetime", FixedDateTime)
+
+    calls = {}
+
+    def fake_kimi(content, language, style, deadline=None):
+        calls["style"] = style
+        return "## Analysis\n\nKimi analysis body"
+
+    monkeypatch.setattr(summarize, "summarize_with_kimi", fake_kimi)
+
+    args = type(
+        "Args",
+        (),
+        {
+            "lang": "en",
+            "style": "analysis",
+            "time": None,
+            "model": "kimi",
+            "json": True,
+            "research": False,
+            "deadline": None,
+            "fast": False,
+            "llm": False,
+            "debug": False,
+        },
+    )()
+
+    summarize.generate_briefing(args)
+    payload = json.loads(capsys.readouterr().out)
+    assert calls["style"] == "analysis"
+    assert payload["summary_mode"] == "llm"
+    assert payload["summary_model_used"] == "kimi"
+    assert "Kimi analysis body" in payload["summary"]
 
 
 # --- Tests for watchpoints feature (Issue #92) ---
@@ -682,3 +946,40 @@ class TestBuildWatchpointsData:
     def test_detects_market_wide_move(self):
         result = build_watchpoints_data([], [], {}, -2.0)
         assert result.market_wide is True
+
+
+def test_generate_briefing_defaults_to_kimi_path(capsys, monkeypatch):
+    def fake_market_news(*_args, **_kwargs):
+        return {
+            "headlines": [{"source": "CNBC", "title": "Headline one", "link": "https://example.com/1"}],
+            "markets": {"us": {"name": "US Markets", "indices": {"^GSPC": {"name": "S&P 500", "data": {"price": 100, "change_percent": 1.0}}}}},
+        }
+
+    monkeypatch.setattr(summarize, "get_market_news", fake_market_news)
+    monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
+    monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
+    monkeypatch.setattr(summarize, "datetime", FixedDateTime)
+    monkeypatch.setattr(summarize, "validate_briefing_structure", lambda *_a, **_k: (True, []))
+    monkeypatch.setattr(summarize, "summarize_with_kimi", lambda *_a, **_k: "### Märkte\n\nAlles ruhig.\n\n### Stimmung\n\nNeutral.\n\n### Top 5 Schlagzeilen\n1. Headline one\n\n### Portfolio-Auswirkung\nBeobachten.\n\n### Beobachtungspunkte\n- Watch one")
+
+    args = type(
+        "Args",
+        (),
+        {
+            "lang": "de",
+            "style": "briefing",
+            "time": None,
+            "model": "kimi",
+            "json": True,
+            "research": False,
+            "deadline": None,
+            "fast": False,
+            "llm": False,
+            "debug": False,
+        },
+    )()
+
+    summarize.generate_briefing(args)
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["summary_mode"] == "llm"
+    assert payload["summary_model_used"] == "kimi"

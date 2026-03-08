@@ -76,7 +76,8 @@ def generate_and_send(args):
     if args.fast:
         cmd.append('--fast')
 
-    if args.llm:
+    force_llm = bool(args.llm or args.style == 'briefing')
+    if force_llm:
         cmd.append('--llm')
         cmd.extend(['--model', args.model])
 
@@ -154,9 +155,9 @@ def main():
                         help='Output as JSON')
     parser.add_argument('--deadline', type=int, default=None,
                         help='Overall deadline in seconds')
-    parser.add_argument('--llm', action='store_true', help='Use LLM summary')
-    parser.add_argument('--model', choices=['claude', 'minimax', 'minimax-direct'],
-                        default='minimax', help='LLM model (only with --llm)')
+    parser.add_argument('--llm', action='store_true', help='Force LLM summary for non-briefing styles')
+    parser.add_argument('--model', choices=['kimi'],
+                        default='kimi', help='LLM model override (briefing forces Kimi by default)')
     parser.add_argument('--fast', action='store_true',
                         help='Use fast mode (shorter timeouts, fewer items)')
     parser.add_argument('--debug', action='store_true',

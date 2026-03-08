@@ -162,7 +162,7 @@
   },
   "llm": {
     "headline_model_order": ["gemini", "minimax", "claude"],
-    "summary_model_order": ["gemini", "minimax", "claude"],
+    "summary_model_order": ["kimi", "claude"],
     "translation_model_order": ["gemini", "minimax", "claude"]
   },
   "translations": {
