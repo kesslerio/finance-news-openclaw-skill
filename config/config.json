@@ -75,10 +75,38 @@
       "top": "https://finance.yahoo.com/rss/topstories"
     }
   },
-  "headline_sources": ["reuters", "wsj", "ft", "bloomberg", "marketwatch", "cnbc", "yahoo"],
+  "headline_sources": [
+    "reuters",
+    "wsj",
+    "ft",
+    "bloomberg",
+    "marketwatch",
+    "cnbc",
+    "yahoo"
+  ],
   "headline_sources_by_lang": {
-    "de": ["wallstreet_online", "tagesschau", "handelsblatt", "zeit", "reuters", "wsj", "ft", "bloomberg", "marketwatch", "cnbc", "yahoo"],
-    "en": ["reuters", "wsj", "ft", "bloomberg", "marketwatch", "cnbc", "yahoo"]
+    "de": [
+      "wallstreet_online",
+      "tagesschau",
+      "handelsblatt",
+      "zeit",
+      "reuters",
+      "wsj",
+      "ft",
+      "bloomberg",
+      "marketwatch",
+      "cnbc",
+      "yahoo"
+    ],
+    "en": [
+      "reuters",
+      "wsj",
+      "ft",
+      "bloomberg",
+      "marketwatch",
+      "cnbc",
+      "yahoo"
+    ]
   },
   "headline_exclude": [],
   "source_weights": {
@@ -95,8 +123,21 @@
     "yahoo": 1
   },
   "source_tiers": {
-    "paid": ["wsj", "ft", "barrons"],
-    "free": ["bloomberg", "marketwatch", "yahoo", "cnbc", "tagesschau", "handelsblatt", "zeit", "wallstreet_online"]
+    "paid": [
+      "wsj",
+      "ft",
+      "barrons"
+    ],
+    "free": [
+      "bloomberg",
+      "marketwatch",
+      "yahoo",
+      "cnbc",
+      "tagesschau",
+      "handelsblatt",
+      "zeit",
+      "wallstreet_online"
+    ]
   },
   "headline_shortlist_size_by_lang": {
     "de": 30,
@@ -107,7 +148,7 @@
     "briefing_limit": 10,
     "prioritization_enabled": true,
     "prioritization_weights": {
-      "type": 0.40,
+      "type": 0.4,
       "volatility": 0.35,
       "news_volume": 0.25
     }
@@ -116,25 +157,48 @@
     "us": {
       "name": "US Markets",
       "enabled": true,
-      "indices": ["^GSPC", "^DJI", "^IXIC"],
-      "index_names": {"^GSPC": "S&P 500", "^DJI": "Dow Jones", "^IXIC": "NASDAQ"}
+      "indices": [
+        "^GSPC",
+        "^DJI",
+        "^IXIC"
+      ],
+      "index_names": {
+        "^GSPC": "S&P 500",
+        "^DJI": "Dow Jones",
+        "^IXIC": "NASDAQ"
+      }
     },
     "europe": {
       "name": "Europe",
       "enabled": true,
-      "indices": ["^GDAXI", "^STOXX50E", "^FTSE"],
-      "index_names": {"^GDAXI": "DAX", "^STOXX50E": "STOXX 50", "^FTSE": "FTSE 100"}
+      "indices": [
+        "^GDAXI",
+        "^STOXX50E",
+        "^FTSE"
+      ],
+      "index_names": {
+        "^GDAXI": "DAX",
+        "^STOXX50E": "STOXX 50",
+        "^FTSE": "FTSE 100"
+      }
     },
     "japan": {
       "name": "Japan",
       "enabled": true,
-      "indices": ["^N225"],
-      "index_names": {"^N225": "Nikkei 225"}
+      "indices": [
+        "^N225"
+      ],
+      "index_names": {
+        "^N225": "Nikkei 225"
+      }
     }
   },
   "language": {
     "default": "en",
-    "supported": ["en", "de"]
+    "supported": [
+      "en",
+      "de"
+    ]
   },
   "delivery": {
     "whatsapp": {
@@ -161,9 +225,15 @@
     }
   },
   "llm": {
-    "headline_model_order": ["gemini", "minimax", "claude"],
-    "summary_model_order": ["gemini", "minimax", "claude"],
-    "translation_model_order": ["gemini", "minimax", "claude"]
+    "headline_model_order": [
+      "kimi"
+    ],
+    "summary_model_order": [
+      "kimi"
+    ],
+    "translation_model_order": [
+      "kimi"
+    ]
   },
   "translations": {
     "en": {

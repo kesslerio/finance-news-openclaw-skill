@@ -21,7 +21,7 @@ AI-powered market news briefings with configurable language output and automated
 docker build -t finance-news-briefing .
 
 # Generate a briefing
-docker run --rm -v "$PWD/config:/app/config:ro" \
+docker run --rm -e KIMI_API_KEY -v "$PWD/config:/app/config:ro" \
   finance-news-briefing python3 scripts/briefing.py \
   --time morning --lang de --json --fast
 ```
@@ -53,6 +53,7 @@ finance-news briefing --morning --lang de --fast --deadline 300
 |----------|-------------|---------|
 | `FINANCE_NEWS_TARGET` | Delivery target (WhatsApp JID, group name, or Telegram chat ID) | *Required* |
 | `FINANCE_NEWS_CHANNEL` | Delivery channel | `whatsapp` or `telegram` |
+| `KIMI_API_KEY` | Enables direct Kimi briefing generation inside Docker | `sk-kimi-...` |
 | `SKILL_DIR` | Path to skill directory (for Lobster) | `$HOME/projects/finance-news-openclaw-skill` |
 
 ## Installation

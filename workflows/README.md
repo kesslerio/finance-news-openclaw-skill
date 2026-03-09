@@ -31,6 +31,7 @@ lobster "workflows.run --file workflows/briefing.yaml --args-json '{\"time\":\"e
 |----------|-------------|
 | `FINANCE_NEWS_CHANNEL` | Default channel: `whatsapp` or `telegram` |
 | `FINANCE_NEWS_TARGET` | Default target (group name, phone, chat ID) |
+| `KIMI_API_KEY` | Enables direct Kimi briefing generation inside Docker |
 
 **Examples:**
 ```bash

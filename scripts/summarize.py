@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-News Summarizer - Generate AI summaries of market news in configurable language.
-Uses MiniMax M2.5 for summarization and translation.
+News Summarizer - Generate market briefings in configurable language.
+Uses direct Kimi API calls for briefing generation.
 """
 
 import argparse
@@ -34,7 +34,9 @@ PORTFOLIO_MOVER_MAX = 8
 PORTFOLIO_MOVER_MIN_ABS_CHANGE = 1.0
 MAX_HEADLINES_IN_PROMPT = 10
 TOP_HEADLINES_COUNT = 5
-DEFAULT_LLM_FALLBACK = ["minimax", "minimax-direct", "claude"]
+DEFAULT_LLM_FALLBACK = ["kimi"]
+DEFAULT_KIMI_BASE_URL = "https://api.kimi.com/coding/"
+DEFAULT_KIMI_MODEL = "k2p5"
 HEADLINE_SHORTLIST_SIZE = 20
 HEADLINE_MERGE_THRESHOLD = 0.82
 HEADLINE_MAX_AGE_HOURS = 72
@@ -50,7 +52,7 @@ INTL_TICKER_NAME_OVERRIDES = {
     "8411.T": "Mizuho Financial",
 }
 
-SUPPORTED_MODELS = {"minimax", "minimax-direct", "claude"}
+SUPPORTED_MODELS = {"kimi"}
 
 # Portfolio prioritization weights
 PORTFOLIO_PRIORITY_WEIGHTS = {
@@ -265,13 +267,28 @@ def time_ago(timestamp: float) -> str:
 STYLE_PROMPTS = {
     "briefing": f"""{HARDENED_SYSTEM_PROMPT}
 
-Structure (use these exact headings):
-1) **Sentiment:** (bullish/bearish/neutral) with a short rationale from the data
-2) **Top 3 Headlines:** numbered list (we will insert the exact list; do not invent)
-3) **Portfolio Impact:** Split into **Holdings** and **Watchlist** sections if applicable. Prioritize Holdings.
-4) **Watchpoints:** short action recommendations (NOT financial advice)
+Structure (use these exact headings and markdown tokens):
+### Markets
+Short market setup from the supplied data only.
 
-Max 200 words. Use emojis sparingly.""",
+### Sentiment
+One-line bullish/bearish/neutral read with a brief rationale from the supplied data only.
+
+### Top 5 Headlines
+Use a numbered list. We will insert the exact headlines; do not invent.
+
+### Portfolio Impact
+Short impact focused on holdings/watchlist names when relevant.
+
+### Watchpoints
+Short concrete watch items. Not financial advice.
+
+Rules:
+- Use the exact `###` headings above.
+- Keep the order exactly as shown.
+- Do not rename headings.
+- Max 200 words total.
+- Use emojis sparingly.""",
 
     "analysis": """You are an experienced financial analyst.
 Analyze the news and provide:
@@ -974,8 +991,8 @@ def parse_translation_array(raw_text: str) -> list[str] | None:
     return None
 
 
-def _extract_minimax_text(body: dict) -> str | None:
-    """Extract text content from a MiniMax Anthropic API response body."""
+def _extract_anthropic_text(body: dict) -> str | None:
+    """Extract text content from an Anthropic-compatible API response body."""
     content = body.get("content", [])
     if not isinstance(content, list):
         return None
@@ -1053,7 +1070,7 @@ def translate_via_minimax_api(
             print(f"  ↳ MiniMax API returned invalid JSON: {e}", file=sys.stderr)
             return titles, False
 
-        reply_text = _extract_minimax_text(body)
+        reply_text = _extract_anthropic_text(body)
         if not reply_text:
             print("  ↳ MiniMax API returned empty response", file=sys.stderr)
             return titles, False
@@ -1097,115 +1114,52 @@ def translate_headline_items(headlines: list[dict], deadline: float | None) -> b
     return True
 
 
-def summarize_with_claude(
+
+
+
+
+def summarize_with_kimi(
     content: str,
     language: str = "de",
     style: str = "briefing",
     deadline: float | None = None,
 ) -> str:
-    """Generate AI summary using Claude via OpenClaw agent."""
-    prompt = f"""{STYLE_PROMPTS.get(style, STYLE_PROMPTS['briefing'])}
+    """Generate AI summary using Kimi Coding API directly."""
 
-{LANG_PROMPTS.get(language, LANG_PROMPTS['de'])}
+    style_prompt = STYLE_PROMPTS.get(style, STYLE_PROMPTS['briefing'])
+    if style == "briefing":
+        labels = load_translations(load_config()).get(language, {})
+        heading_markets = labels.get("heading_markets", "Markets")
+        heading_sentiment = labels.get("heading_sentiment", "Sentiment")
+        heading_top = labels.get("heading_top_headlines", "Top 5 Headlines")
+        heading_portfolio = labels.get("heading_portfolio_impact", "Portfolio Impact")
+        heading_watchpoints = labels.get("heading_watchpoints", "Watchpoints")
+        style_prompt = f"""{HARDENED_SYSTEM_PROMPT}
 
-Use only the following information for the briefing:
+Structure (use these exact headings and markdown tokens):
+### {heading_markets}
+Short market setup from the supplied data only.
 
-{content}
-"""
+### {heading_sentiment}
+One-line bullish/bearish/neutral read with a brief rationale from the supplied data only.
 
-    try:
-        cli_timeout = clamp_timeout(120, deadline)
-        proc_timeout = clamp_timeout(150, deadline)
-        result = subprocess.run(
-            [
-                'openclaw', 'agent',
-                '--session-id', 'finance-news-briefing',
-                '--message', prompt,
-                '--json',
-                '--timeout', str(cli_timeout)
-            ],
-            capture_output=True,
-            text=True,
-            timeout=proc_timeout
-        )
-    except subprocess.TimeoutExpired:
-        return "⚠️ Claude briefing error: timeout"
-    except TimeoutError:
-        return "⚠️ Claude briefing error: deadline exceeded"
-    except FileNotFoundError:
-        return "⚠️ Claude briefing error: openclaw CLI not found"
-    except OSError as exc:
-        return f"⚠️ Claude briefing error: {exc}"
+### {heading_top}
+Use a numbered list. We will insert the exact headlines; do not invent.
 
-    if result.returncode == 0:
-        reply = extract_agent_reply(result.stdout)
-        # Add financial disclaimer
-        reply += format_disclaimer(language)
-        return reply
+### {heading_portfolio}
+Short impact focused on holdings/watchlist names when relevant.
 
-    stderr = result.stderr.strip() or "unknown error"
-    return f"⚠️ Claude briefing error: {stderr}"
+### {heading_watchpoints}
+Short concrete watch items. Not financial advice.
 
+Rules:
+- Use the exact `###` headings above.
+- Keep the order exactly as shown.
+- Do not rename headings.
+- Max 200 words total.
+- Use emojis sparingly."""
 
-def summarize_with_minimax(
-    content: str,
-    language: str = "de",
-    style: str = "briefing",
-    deadline: float | None = None,
-) -> str:
-    """Generate AI summary using MiniMax model via openclaw agent."""
-    prompt = f"""{STYLE_PROMPTS.get(style, STYLE_PROMPTS['briefing'])}
-
-{LANG_PROMPTS.get(language, LANG_PROMPTS['de'])}
-
-Use only the following information for the briefing:
-
-{content}
-"""
-
-    try:
-        cli_timeout = clamp_timeout(120, deadline)
-        proc_timeout = clamp_timeout(150, deadline)
-        result = subprocess.run(
-            [
-                'openclaw', 'agent',
-                '--session-id', 'finance-news-briefing',
-                '--message', prompt,
-                '--json',
-                '--timeout', str(cli_timeout)
-            ],
-            capture_output=True,
-            text=True,
-            timeout=proc_timeout
-        )
-    except subprocess.TimeoutExpired:
-        return "⚠️ MiniMax briefing error: timeout"
-    except TimeoutError:
-        return "⚠️ MiniMax briefing error: deadline exceeded"
-    except FileNotFoundError:
-        return "⚠️ MiniMax briefing error: openclaw CLI not found"
-    except OSError as exc:
-        return f"⚠️ MiniMax briefing error: {exc}"
-
-    if result.returncode == 0:
-        reply = extract_agent_reply(result.stdout)
-        # Add financial disclaimer
-        reply += format_disclaimer(language)
-        return reply
-
-    stderr = result.stderr.strip() or "unknown error"
-    return f"⚠️ MiniMax briefing error: {stderr}"
-
-
-def summarize_with_minimax_direct(
-    content: str,
-    language: str = "de",
-    style: str = "briefing",
-    deadline: float | None = None,
-) -> str:
-    """Generate AI summary using MiniMax M2.5 Anthropic API directly (no CLI dependency)."""
-
-    prompt = f"""{STYLE_PROMPTS.get(style, STYLE_PROMPTS['briefing'])}
+    prompt = f"""{style_prompt}
 
 {LANG_PROMPTS.get(language, LANG_PROMPTS['de'])}
 
@@ -1214,17 +1168,19 @@ Here are the current market items:
 {content}
 """
 
-    api_key = (os.getenv("MINIMAX_CODING_PLAN_API_KEY") or "").strip()
+    api_key = (os.getenv("KIMI_API_KEY") or "").strip()
     if not api_key:
-        return "⚠️ MiniMax direct error: MINIMAX_CODING_PLAN_API_KEY not set"
+        return "⚠️ Kimi briefing error: KIMI_API_KEY not set"
+
+    base_url = (os.getenv("KIMI_API_BASE_URL") or DEFAULT_KIMI_BASE_URL).strip() or DEFAULT_KIMI_BASE_URL
+    model = (os.getenv("FINANCE_NEWS_KIMI_MODEL") or DEFAULT_KIMI_MODEL).strip() or DEFAULT_KIMI_MODEL
+    url = urllib.parse.urljoin(base_url.rstrip("/") + "/", "v1/messages")
 
     payload = json.dumps({
-        "model": "MiniMax-M2.5",
+        "model": model,
         "max_tokens": 8192,
         "messages": [{"role": "user", "content": prompt}],
     }).encode("utf-8")
-
-    url = "https://api.minimax.io/anthropic/v1/messages"
     headers = {
         "Content-Type": "application/json",
         "x-api-key": api_key,
@@ -1240,15 +1196,15 @@ Here are the current market items:
             raw = response.read().decode("utf-8")
         body = json.loads(raw)
     except HTTPError as e:
-        return f"⚠️ MiniMax direct error: HTTP {e.code}"
+        return f"⚠️ Kimi briefing error: HTTP {e.code}"
     except (TimeoutError, URLError, OSError) as e:
-        return f"⚠️ MiniMax direct error: {e}"
+        return f"⚠️ Kimi briefing error: {e}"
     except json.JSONDecodeError as e:
-        return f"⚠️ MiniMax direct error: invalid JSON: {e}"
+        return f"⚠️ Kimi briefing error: invalid JSON: {e}"
 
-    reply_text = _extract_minimax_text(body)
+    reply_text = _extract_anthropic_text(body)
     if not reply_text:
-        return "⚠️ MiniMax direct error: empty response"
+        return "⚠️ Kimi briefing error: empty response"
 
     reply_text += format_disclaimer(language)
     return reply_text
@@ -1858,7 +1814,11 @@ def generate_briefing(args):
     else:
         content = raw_content
 
-    model = getattr(args, 'model', 'claude')
+    model = getattr(args, 'model', DEFAULT_KIMI_MODEL)
+    # Kimi is the active writer for the supported summary styles. The outer
+    # caller may still pass --llm, but briefing no longer relies on that flag
+    # to enter the AI path.
+    use_llm = True
     summary_primary = os.environ.get("FINANCE_NEWS_SUMMARY_MODEL")
     summary_fallback_env = os.environ.get("FINANCE_NEWS_SUMMARY_FALLBACKS")
     summary_list = parse_model_list(
@@ -1870,12 +1830,16 @@ def generate_briefing(args):
             summary_list = [summary_primary] + summary_list
         else:
             summary_list = [summary_primary] + [m for m in summary_list if m != summary_primary]
-    if args.llm and model and model in SUPPORTED_MODELS:
+    if use_llm and model and model in SUPPORTED_MODELS:
         summary_list = [model] + [m for m in summary_list if m != model]
+    if args.style == "briefing":
+        summary_list = [m for m in summary_list if m == "kimi"] or ["kimi"]
 
     summary_mode = "deterministic"
     summary_model_used = "deterministic"
-    if args.llm and remaining is not None and remaining <= 0:
+    summary = ""
+    last_summary_error = None
+    if args.style == "briefing" and remaining is not None and remaining <= 0:
         print("⚠️ Deadline exceeded; using deterministic summary", file=sys.stderr)
         summary = build_briefing_summary(market_data, portfolio_data, movers, top_headlines, labels, language)
         summary_mode = "deterministic"
@@ -1885,7 +1849,7 @@ def generate_briefing(args):
                 "summary_model_used": summary_model_used,
                 "summary_model_attempts": summary_list,
             })
-    elif args.style == "briefing" and not args.llm:
+    elif not use_llm:
         summary = build_briefing_summary(market_data, portfolio_data, movers, top_headlines, labels, language)
         summary_mode = "deterministic"
         summary_model_used = "deterministic"
@@ -1895,35 +1859,40 @@ def generate_briefing(args):
                 "summary_model_attempts": summary_list,
             })
     else:
-        print(f"🤖 Generating AI summary with fallback order: {', '.join(summary_list)}", file=sys.stderr)
-        summary = ""
+        print(f"🤖 Generating Kimi summary with model order: {', '.join(summary_list)}", file=sys.stderr)
         summary_used = None
         summary_mode = "llm"
         summary_model_used = "llm_failed"
         for candidate in summary_list:
-            if candidate == "minimax":
-                summary = summarize_with_minimax(content, language, args.style, deadline=deadline)
-            elif candidate == "minimax-direct":
-                summary = summarize_with_minimax_direct(content, language, args.style, deadline=deadline)
+            if candidate == "kimi":
+                summary = summarize_with_kimi(content, language, args.style, deadline=deadline)
             else:
-                summary = summarize_with_claude(content, language, args.style, deadline=deadline)
+                summary = f"⚠️ Unsupported summary model: {candidate}"
 
             if not summary.startswith("⚠️"):
                 summary_used = candidate
                 summary_model_used = candidate
                 break
+            last_summary_error = summary
             print(summary, file=sys.stderr)
 
-        if args.debug and summary_used:
-            debug_payload.update({
-                "summary_model_used": summary_used,
-                "summary_model_attempts": summary_list,
-            })
+        if not summary_used:
+            raise RuntimeError(last_summary_error or "Kimi summary generation failed")
 
     summary_structure_ok = True
     summary_missing_sections: list[str] = []
     if args.style == "briefing":
+        if summary_mode != "llm" or summary_model_used != "kimi":
+            raise RuntimeError(f"Briefing requires Kimi writer, got {summary_model_used}")
         summary_structure_ok, summary_missing_sections = validate_briefing_structure(summary, labels)
+        if not summary_structure_ok:
+            raise RuntimeError("Kimi briefing missing required sections: " + ", ".join(summary_missing_sections))
+
+    if args.debug:
+        debug_payload.update({
+            "summary_model_used": summary_model_used,
+            "summary_model_attempts": summary_list,
+        })
     
     # Format output
     now = datetime.now()
@@ -2014,10 +1983,11 @@ def main():
                         default='briefing', help='Summary style')
     parser.add_argument('--time', choices=['morning', 'evening'],
                         default=None, help='Briefing type (default: auto)')
-    # Note: --model removed - model selection is now handled by openclaw gateway config
     parser.add_argument('--json', action='store_true', help='Output as JSON')
     parser.add_argument('--research', action='store_true', help='Include deep research section (slower)')
-    parser.add_argument('--llm', action='store_true', help='Use LLM for briefing (default: deterministic)')
+    parser.add_argument('--llm', action='store_true', help='Force LLM summary for non-briefing styles (briefing uses Kimi by default)')
+    parser.add_argument('--model', choices=sorted(SUPPORTED_MODELS), default='kimi',
+                        help='Kimi provider override')
     parser.add_argument('--deadline', type=int, default=None, help='Overall deadline in seconds')
     parser.add_argument('--fast', action='store_true', help='Use fast mode (shorter timeouts, fewer items)')
     parser.add_argument('--debug', action='store_true', help='Write debug log with sources')

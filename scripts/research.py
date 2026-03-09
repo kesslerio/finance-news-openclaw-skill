@@ -84,6 +84,16 @@ def minimax_prompt_available() -> bool:
     return shutil.which('minimax-prompt') is not None
 
 
+def gemini_available() -> bool:
+    """Backward-compatible alias for legacy test/import surface."""
+    return minimax_prompt_available()
+
+
+def research_with_gemini(content: str, focus_areas: list = None) -> str:
+    """Backward-compatible alias for legacy callers/tests."""
+    return research_with_minimax(content, focus_areas=focus_areas)
+
+
 def research_with_minimax(content: str, focus_areas: list = None) -> str:
     """Perform deep research using minimax-prompt CLI (MiniMax M2.5 direct API).
     
