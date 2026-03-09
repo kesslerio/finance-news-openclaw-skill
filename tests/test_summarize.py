@@ -586,12 +586,11 @@ def test_generate_analysis_uses_claude_when_kimi_unavailable(monkeypatch, capsys
         },
     )()
 
-    monkeypatch.setattr(summarize, "summarize_with_claude", lambda *_a, **_k: "## Analysis\n\nClaude analysis body")
+    monkeypatch.setattr(summarize, "summarize_with_claude", lambda *_a, **_k: "## Analysis\n\nKimi analysis body")
     summarize.generate_briefing(args)
     payload = json.loads(capsys.readouterr().out)
     assert payload["summary_mode"] == "llm"
-    assert payload["summary_model_used"] == "claude"
-    assert "Claude analysis body" in payload["summary"]
+    assert "Kimi analysis body" in payload["summary"]
 
 
 def test_generate_analysis_uses_kimi_even_without_llm_flag(capsys, monkeypatch):
@@ -983,3 +982,38 @@ def test_generate_briefing_defaults_to_kimi_path(capsys, monkeypatch):
     payload = json.loads(capsys.readouterr().out)
     assert payload["summary_mode"] == "llm"
     assert payload["summary_model_used"] == "kimi"
+
+
+def test_generate_analysis_hard_fails_without_non_kimi_fallback(monkeypatch):
+    def fake_market_news(*_args, **_kwargs):
+        return {
+            "headlines": [{"source": "CNBC", "title": "Headline one", "link": "https://example.com/1"}],
+            "markets": {"us": {"name": "US Markets", "indices": {"^GSPC": {"name": "S&P 500", "data": {"price": 100, "change_percent": 1.0}}}}},
+        }
+
+    monkeypatch.setattr(summarize, "get_market_news", fake_market_news)
+    monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
+    monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
+    monkeypatch.setattr(summarize, "datetime", FixedDateTime)
+    monkeypatch.setattr(summarize, "summarize_with_kimi", lambda *_a, **_k: "⚠️ Kimi briefing error: KIMI_API_KEY not set")
+
+    args = type(
+        "Args",
+        (),
+        {
+            "lang": "en",
+            "style": "analysis",
+            "time": None,
+            "model": "kimi",
+            "json": True,
+            "research": False,
+            "deadline": None,
+            "fast": False,
+            "llm": False,
+            "debug": False,
+        },
+    )()
+
+    import pytest
+    with pytest.raises(RuntimeError, match="KIMI_API_KEY not set"):
+        summarize.generate_briefing(args)

@@ -34,7 +34,7 @@ PORTFOLIO_MOVER_MAX = 8
 PORTFOLIO_MOVER_MIN_ABS_CHANGE = 1.0
 MAX_HEADLINES_IN_PROMPT = 10
 TOP_HEADLINES_COUNT = 5
-DEFAULT_LLM_FALLBACK = ["kimi", "claude"]
+DEFAULT_LLM_FALLBACK = ["kimi"]
 DEFAULT_KIMI_BASE_URL = "https://api.kimi.com/coding/"
 DEFAULT_KIMI_MODEL = "k2p5"
 HEADLINE_SHORTLIST_SIZE = 20
@@ -52,7 +52,7 @@ INTL_TICKER_NAME_OVERRIDES = {
     "8411.T": "Mizuho Financial",
 }
 
-SUPPORTED_MODELS = {"kimi", "claude"}
+SUPPORTED_MODELS = {"kimi"}
 
 # Portfolio prioritization weights
 PORTFOLIO_PRIORITY_WEIGHTS = {
@@ -1114,104 +1114,8 @@ def translate_headline_items(headlines: list[dict], deadline: float | None) -> b
     return True
 
 
-def summarize_with_claude(
-    content: str,
-    language: str = "de",
-    style: str = "briefing",
-    deadline: float | None = None,
-) -> str:
-    """Generate AI summary using Claude via OpenClaw agent."""
-    prompt = f"""{STYLE_PROMPTS.get(style, STYLE_PROMPTS['briefing'])}
-
-{LANG_PROMPTS.get(language, LANG_PROMPTS['de'])}
-
-Use only the following information for the briefing:
-
-{content}
-"""
-
-    try:
-        cli_timeout = clamp_timeout(120, deadline)
-        proc_timeout = clamp_timeout(150, deadline)
-        result = subprocess.run(
-            [
-                'openclaw', 'agent',
-                '--session-id', 'finance-news-briefing',
-                '--message', prompt,
-                '--json',
-                '--timeout', str(cli_timeout)
-            ],
-            capture_output=True,
-            text=True,
-            timeout=proc_timeout
-        )
-    except subprocess.TimeoutExpired:
-        return "⚠️ Claude briefing error: timeout"
-    except TimeoutError:
-        return "⚠️ Claude briefing error: deadline exceeded"
-    except FileNotFoundError:
-        return "⚠️ Claude briefing error: openclaw CLI not found"
-    except OSError as exc:
-        return f"⚠️ Claude briefing error: {exc}"
-
-    if result.returncode == 0:
-        reply = extract_agent_reply(result.stdout)
-        # Add financial disclaimer
-        reply += format_disclaimer(language)
-        return reply
-
-    stderr = result.stderr.strip() or "unknown error"
-    return f"⚠️ Claude briefing error: {stderr}"
 
 
-def summarize_with_minimax(
-    content: str,
-    language: str = "de",
-    style: str = "briefing",
-    deadline: float | None = None,
-) -> str:
-    """Generate AI summary using MiniMax model via openclaw agent."""
-    prompt = f"""{STYLE_PROMPTS.get(style, STYLE_PROMPTS['briefing'])}
-
-{LANG_PROMPTS.get(language, LANG_PROMPTS['de'])}
-
-Use only the following information for the briefing:
-
-{content}
-"""
-
-    try:
-        cli_timeout = clamp_timeout(120, deadline)
-        proc_timeout = clamp_timeout(150, deadline)
-        result = subprocess.run(
-            [
-                'openclaw', 'agent',
-                '--session-id', 'finance-news-briefing',
-                '--message', prompt,
-                '--json',
-                '--timeout', str(cli_timeout)
-            ],
-            capture_output=True,
-            text=True,
-            timeout=proc_timeout
-        )
-    except subprocess.TimeoutExpired:
-        return "⚠️ MiniMax briefing error: timeout"
-    except TimeoutError:
-        return "⚠️ MiniMax briefing error: deadline exceeded"
-    except FileNotFoundError:
-        return "⚠️ MiniMax briefing error: openclaw CLI not found"
-    except OSError as exc:
-        return f"⚠️ MiniMax briefing error: {exc}"
-
-    if result.returncode == 0:
-        reply = extract_agent_reply(result.stdout)
-        # Add financial disclaimer
-        reply += format_disclaimer(language)
-        return reply
-
-    stderr = result.stderr.strip() or "unknown error"
-    return f"⚠️ MiniMax briefing error: {stderr}"
 
 
 def summarize_with_kimi(
@@ -1955,15 +1859,13 @@ def generate_briefing(args):
                 "summary_model_attempts": summary_list,
             })
     else:
-        print(f"🤖 Generating AI summary with model order: {', '.join(summary_list)}", file=sys.stderr)
+        print(f"🤖 Generating Kimi summary with model order: {', '.join(summary_list)}", file=sys.stderr)
         summary_used = None
         summary_mode = "llm"
         summary_model_used = "llm_failed"
         for candidate in summary_list:
             if candidate == "kimi":
                 summary = summarize_with_kimi(content, language, args.style, deadline=deadline)
-            elif candidate == "claude":
-                summary = summarize_with_claude(content, language, args.style, deadline=deadline)
             else:
                 summary = f"⚠️ Unsupported summary model: {candidate}"
 
@@ -1980,8 +1882,10 @@ def generate_briefing(args):
     summary_structure_ok = True
     summary_missing_sections: list[str] = []
     if args.style == "briefing":
+        if summary_mode != "llm" or summary_model_used != "kimi":
+            raise RuntimeError(f"Briefing requires Kimi writer, got {summary_model_used}")
         summary_structure_ok, summary_missing_sections = validate_briefing_structure(summary, labels)
-        if summary_mode == "llm" and not summary_structure_ok:
+        if not summary_structure_ok:
             raise RuntimeError("Kimi briefing missing required sections: " + ", ".join(summary_missing_sections))
 
     if args.debug:
@@ -2083,7 +1987,7 @@ def main():
     parser.add_argument('--research', action='store_true', help='Include deep research section (slower)')
     parser.add_argument('--llm', action='store_true', help='Force LLM summary for non-briefing styles (briefing uses Kimi by default)')
     parser.add_argument('--model', choices=sorted(SUPPORTED_MODELS), default='kimi',
-                        help='LLM provider override')
+                        help='Kimi provider override')
     parser.add_argument('--deadline', type=int, default=None, help='Overall deadline in seconds')
     parser.add_argument('--fast', action='store_true', help='Use fast mode (shorter timeouts, fewer items)')
     parser.add_argument('--debug', action='store_true', help='Write debug log with sources')
