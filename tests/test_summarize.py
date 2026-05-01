@@ -16,12 +16,12 @@ from summarize import (
     build_portfolio_message,
     build_watchpoints_data,
     classify_move_type,
-    validate_briefing_structure,
     detect_sector_clusters,
     format_symbol_display,
     format_watchpoints,
     get_index_change,
     match_headline_to_symbol,
+    validate_briefing_structure,
 )
 
 
@@ -45,39 +45,33 @@ class _FakeUrlopenResponse:
         return False
 
 
-def test_translate_via_gemini_api_parses_markdown_json(monkeypatch):
+def test_translate_via_minimax_api_parses_markdown_json(monkeypatch):
     payload = {
-        "candidates": [
-            {
-                "content": {
-                    "parts": [
-                        {"text": "```json\n[\"Titel A\", \"Titel B\"]\n```"}
-                    ]
-                }
-            }
+        "content": [
+            {"type": "text", "text": "```json\n[\"Titel A\", \"Titel B\"]\n```"}
         ]
     }
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("MINIMAX_CODING_PLAN_API_KEY", "test-key")
     monkeypatch.setattr(
         summarize.urllib.request,
         "urlopen",
         lambda req, timeout=0: _FakeUrlopenResponse(payload),
     )
 
-    translated, success = summarize.translate_via_gemini_api(["Title A", "Title B"], deadline=None)
+    translated, success = summarize.translate_via_minimax_api(["Title A", "Title B"], deadline=None)
     assert success is True
     assert translated == ["Titel A", "Titel B"]
 
 
-def test_translate_headlines_uses_gemini_api_first(monkeypatch):
+def test_translate_headlines_uses_minimax_api_first(monkeypatch):
     monkeypatch.setattr(
         summarize,
-        "translate_via_gemini_api",
+        "translate_via_minimax_api",
         lambda titles, deadline: (["Titel"], True),
     )
 
     def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("run_agent_prompt should not be called when Gemini API succeeds")
+        raise AssertionError("run_agent_prompt should not be called when MiniMax API succeeds")
 
     monkeypatch.setattr(summarize, "run_agent_prompt", fail_if_called)
 
@@ -89,7 +83,7 @@ def test_translate_headlines_uses_gemini_api_first(monkeypatch):
 def test_translate_headlines_falls_back_to_openclaw(monkeypatch):
     monkeypatch.setattr(
         summarize,
-        "translate_via_gemini_api",
+        "translate_via_minimax_api",
         lambda titles, deadline: (titles, False),
     )
     monkeypatch.setattr(summarize, "run_agent_prompt", lambda *_a, **_k: "[\"Titel\"]")
@@ -99,56 +93,56 @@ def test_translate_headlines_falls_back_to_openclaw(monkeypatch):
     assert translated == ["Titel"]
 
 
-def test_translate_via_gemini_api_missing_key(monkeypatch):
-    """Returns original titles when GEMINI_API_KEY is not set."""
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    translated, success = summarize.translate_via_gemini_api(["Title A"], deadline=None)
+def test_translate_via_minimax_api_missing_key(monkeypatch):
+    """Returns original titles when MINIMAX_CODING_PLAN_API_KEY is not set."""
+    monkeypatch.delenv("MINIMAX_CODING_PLAN_API_KEY", raising=False)
+    translated, success = summarize.translate_via_minimax_api(["Title A"], deadline=None)
     assert success is False
     assert translated == ["Title A"]
 
 
-def test_translate_via_gemini_api_empty_key(monkeypatch):
-    """Returns original titles when GEMINI_API_KEY is empty/whitespace."""
-    monkeypatch.setenv("GEMINI_API_KEY", "  ")
-    translated, success = summarize.translate_via_gemini_api(["Title A"], deadline=None)
+def test_translate_via_minimax_api_empty_key(monkeypatch):
+    """Returns original titles when MINIMAX_CODING_PLAN_API_KEY is empty/whitespace."""
+    monkeypatch.setenv("MINIMAX_CODING_PLAN_API_KEY", "  ")
+    translated, success = summarize.translate_via_minimax_api(["Title A"], deadline=None)
     assert success is False
     assert translated == ["Title A"]
 
 
-def test_translate_via_gemini_api_http_error(monkeypatch):
+def test_translate_via_minimax_api_http_error(monkeypatch):
     """Falls back on non-retryable HTTP errors (e.g. 400)."""
-    from urllib.error import HTTPError
     import io
+    from urllib.error import HTTPError
 
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(summarize, "_GEMINI_MAX_RETRIES", 0)
+    monkeypatch.setenv("MINIMAX_CODING_PLAN_API_KEY", "test-key")
+    monkeypatch.setattr(summarize, "_MINIMAX_MAX_RETRIES", 0)
 
     def raise_400(req, timeout=0):
         raise HTTPError("https://example.com", 400, "Bad Request", {}, io.BytesIO(b""))
 
     monkeypatch.setattr(summarize.urllib.request, "urlopen", raise_400)
-    translated, success = summarize.translate_via_gemini_api(["Title"], deadline=None)
+    translated, success = summarize.translate_via_minimax_api(["Title"], deadline=None)
     assert success is False
     assert translated == ["Title"]
 
 
-def test_translate_via_gemini_api_timeout(monkeypatch):
+def test_translate_via_minimax_api_timeout(monkeypatch):
     """Falls back on timeout."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(summarize, "_GEMINI_MAX_RETRIES", 0)
+    monkeypatch.setenv("MINIMAX_CODING_PLAN_API_KEY", "test-key")
+    monkeypatch.setattr(summarize, "_MINIMAX_MAX_RETRIES", 0)
 
     def raise_timeout(req, timeout=0):
         raise TimeoutError("Connection timed out")
 
     monkeypatch.setattr(summarize.urllib.request, "urlopen", raise_timeout)
-    translated, success = summarize.translate_via_gemini_api(["Title"], deadline=None)
+    translated, success = summarize.translate_via_minimax_api(["Title"], deadline=None)
     assert success is False
     assert translated == ["Title"]
 
 
-def test_translate_via_gemini_api_malformed_json(monkeypatch):
+def test_translate_via_minimax_api_malformed_json(monkeypatch):
     """Falls back when API returns non-JSON."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("MINIMAX_CODING_PLAN_API_KEY", "test-key")
 
     class _BadResponse:
         def read(self):
@@ -159,57 +153,53 @@ def test_translate_via_gemini_api_malformed_json(monkeypatch):
             return False
 
     monkeypatch.setattr(summarize.urllib.request, "urlopen", lambda req, timeout=0: _BadResponse())
-    translated, success = summarize.translate_via_gemini_api(["Title"], deadline=None)
+    translated, success = summarize.translate_via_minimax_api(["Title"], deadline=None)
     assert success is False
     assert translated == ["Title"]
 
 
-def test_translate_via_gemini_api_empty_candidates(monkeypatch):
-    """Falls back when API returns empty candidates array."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    payload = {"candidates": []}
+def test_translate_via_minimax_api_empty_content(monkeypatch):
+    """Falls back when API returns empty content array."""
+    monkeypatch.setenv("MINIMAX_CODING_PLAN_API_KEY", "test-key")
+    payload = {"content": []}
     monkeypatch.setattr(
         summarize.urllib.request, "urlopen",
         lambda req, timeout=0: _FakeUrlopenResponse(payload),
     )
-    translated, success = summarize.translate_via_gemini_api(["Title"], deadline=None)
+    translated, success = summarize.translate_via_minimax_api(["Title"], deadline=None)
     assert success is False
     assert translated == ["Title"]
 
 
-def test_translate_via_gemini_api_length_mismatch(monkeypatch):
+def test_translate_via_minimax_api_length_mismatch(monkeypatch):
     """Falls back when API returns wrong number of translations."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("MINIMAX_CODING_PLAN_API_KEY", "test-key")
     payload = {
-        "candidates": [{
-            "content": {"parts": [{"text": '["Only One"]'}]}
-        }]
+        "content": [{"type": "text", "text": '["Only One"]'}]
     }
     monkeypatch.setattr(
         summarize.urllib.request, "urlopen",
         lambda req, timeout=0: _FakeUrlopenResponse(payload),
     )
-    translated, success = summarize.translate_via_gemini_api(
+    translated, success = summarize.translate_via_minimax_api(
         ["Title A", "Title B", "Title C"], deadline=None,
     )
     assert success is False
     assert translated == ["Title A", "Title B", "Title C"]
 
 
-def test_translate_via_gemini_api_retries_on_429(monkeypatch):
+def test_translate_via_minimax_api_retries_on_429(monkeypatch):
     """Retries on 429 then succeeds."""
-    from urllib.error import HTTPError
     import io
+    from urllib.error import HTTPError
 
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(summarize, "_GEMINI_MAX_RETRIES", 1)
+    monkeypatch.setenv("MINIMAX_CODING_PLAN_API_KEY", "test-key")
+    monkeypatch.setattr(summarize, "_MINIMAX_MAX_RETRIES", 1)
     monkeypatch.setattr(summarize.time, "sleep", lambda s: None)  # skip wait
 
     call_count = [0]
     success_payload = {
-        "candidates": [{
-            "content": {"parts": [{"text": '["Titel"]'}]}
-        }]
+        "content": [{"type": "text", "text": '["Titel"]'}]
     }
 
     def mock_urlopen(req, timeout=0):
@@ -219,15 +209,15 @@ def test_translate_via_gemini_api_retries_on_429(monkeypatch):
         return _FakeUrlopenResponse(success_payload)
 
     monkeypatch.setattr(summarize.urllib.request, "urlopen", mock_urlopen)
-    translated, success = summarize.translate_via_gemini_api(["Title"], deadline=None)
+    translated, success = summarize.translate_via_minimax_api(["Title"], deadline=None)
     assert success is True
     assert translated == ["Titel"]
     assert call_count[0] == 2
 
 
-def test_translate_via_gemini_api_empty_list():
+def test_translate_via_minimax_api_empty_list():
     """Returns empty list for empty input."""
-    translated, success = summarize.translate_via_gemini_api([], deadline=None)
+    translated, success = summarize.translate_via_minimax_api([], deadline=None)
     assert success is True
     assert translated == []
 
@@ -523,7 +513,7 @@ def test_summarize_with_kimi_missing_key(monkeypatch):
     assert summary == "⚠️ Kimi briefing error: KIMI_API_KEY not set"
 
 
-def test_generate_briefing_deadline_uses_deterministic_fallback(capsys, monkeypatch):
+def test_generate_briefing_zero_deadline_disables_timeout(capsys, monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [{"source": "CNBC", "title": "Headline one", "link": "https://example.com/1"}],
@@ -534,6 +524,17 @@ def test_generate_briefing_deadline_uses_deterministic_fallback(capsys, monkeypa
     monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
+    monkeypatch.setattr(
+        summarize,
+        "summarize_with_kimi",
+        lambda *_a, **_k: (
+            "### Märkte\nAlles ruhig.\n\n"
+            "### Stimmung\nNeutral.\n\n"
+            "### Top 5 Schlagzeilen\n1. Headline one\n\n"
+            "### Portfolio-Auswirkung\nKeine.\n\n"
+            "### Beobachtungspunkte\n- Watch one"
+        ),
+    )
 
     args = type(
         "Args",
@@ -554,8 +555,8 @@ def test_generate_briefing_deadline_uses_deterministic_fallback(capsys, monkeypa
 
     summarize.generate_briefing(args)
     payload = json.loads(capsys.readouterr().out)
-    assert payload["summary_mode"] == "deterministic"
-    assert payload["summary_model_used"] == "deterministic_deadline_fallback"
+    assert payload["summary_mode"] == "llm"
+    assert payload["summary_model_used"] == "kimi"
 
 
 def test_generate_briefing_hard_fails_when_kimi_key_missing(monkeypatch):
@@ -604,7 +605,7 @@ def test_generate_briefing_hard_fails_when_kimi_key_missing(monkeypatch):
         summarize.generate_briefing(args)
 
 
-def test_generate_analysis_uses_claude_when_kimi_unavailable(monkeypatch, capsys):
+def test_generate_analysis_hard_fails_when_kimi_unavailable(monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [
@@ -643,11 +644,9 @@ def test_generate_analysis_uses_claude_when_kimi_unavailable(monkeypatch, capsys
         },
     )()
 
-    monkeypatch.setattr(summarize, "summarize_with_claude", lambda *_a, **_k: "## Analysis\n\nKimi analysis body")
-    summarize.generate_briefing(args)
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["summary_mode"] == "llm"
-    assert "Kimi analysis body" in payload["summary"]
+    import pytest
+    with pytest.raises(RuntimeError, match="KIMI_API_KEY not set"):
+        summarize.generate_briefing(args)
 
 
 def test_generate_analysis_uses_kimi_even_without_llm_flag(capsys, monkeypatch):
