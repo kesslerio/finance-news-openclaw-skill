@@ -287,15 +287,19 @@ def test_format_symbol_display_international_ticker():
     assert display == "Novo Nordisk (NOVO-B.CO)"
 
 
-def test_build_portfolio_message_adds_links_and_translation(monkeypatch):
+def test_build_portfolio_message_renders_attribution_without_source_dump():
     portfolio_data = {
         "meta": {"total_stocks": 2},
         "stocks": {
             "NOVO-B.CO": {
-                "quote": {"price": 100.0, "change_percent": -2.5},
-                "info": {},
+                "quote": {"price": 100.0, "change_percent": -2.5, "currency": "DKK"},
+                "info": {"name": "Novo Nordisk", "category": "Healthcare"},
                 "articles": [
-                    {"title": "Novo Nordisk falls on trial update", "link": "https://example.com/novo"}
+                    {
+                        "title": "Why Novo Nordisk Stock Is Moving Today",
+                        "link": "https://finance.yahoo.com/news/novo-stock-moving-today",
+                        "source": "Yahoo Finance",
+                    }
                 ],
             }
         },
@@ -303,18 +307,71 @@ def test_build_portfolio_message_adds_links_and_translation(monkeypatch):
     labels = {
         "heading_portfolio_movers": "Portfolio-Bewegungen",
         "sources_header": "Quellen",
+        "portfolio_attr_benchmark": "Einordnung",
+        "portfolio_attr_residual": "Restbewegung",
+        "portfolio_attr_no_catalyst": "kein bestätigter Auslöser",
+        "portfolio_classification_map": {"sector_theme": "sektor-/themengetrieben"},
     }
-    monkeypatch.setattr(summarize, "load_portfolio_metadata", lambda: {"NOVO-B.CO": {"name": "Novo Nordisk"}})
-    monkeypatch.setattr(
-        summarize,
-        "translate_headlines",
-        lambda titles, deadline=None: (["Novo Nordisk fällt nach Studienupdate"], True),
+    benchmark_config = summarize.load_benchmark_config()
+
+    output = build_portfolio_message(
+        portfolio_data,
+        labels,
+        "de",
+        benchmark_quotes={"XLV": {"change_percent": -2.0}, "ACWI": {"change_percent": -0.3}},
+        benchmark_config=benchmark_config,
     )
 
-    output = build_portfolio_message(portfolio_data, labels, "de")
     assert "Novo Nordisk (NOVO-B.CO)" in output
-    assert "Novo Nordisk fällt nach Studienupdate [1]" in output
-    assert "## Quellen" in output
+    assert "Einordnung: sektor-/themengetrieben" in output
+    assert "Restbewegung -0.5%" in output
+    assert "kein bestätigter Auslöser" in output
+    assert "## Quellen" not in output
+    assert "finance.yahoo.com" not in output
+
+
+def test_build_portfolio_message_uses_non_usd_price_symbol():
+    portfolio_data = {
+        "stocks": {
+            "6861.T": {
+                "quote": {"price": 27830.0, "change_percent": -5.2},
+                "info": {"name": "Keyence", "category": "Industrials"},
+                "articles": [],
+            }
+        }
+    }
+
+    output = build_portfolio_message(
+        portfolio_data,
+        {"heading_portfolio_movers": "Portfolio-Bewegungen"},
+        "de",
+        benchmark_quotes={"EWJ": {"change_percent": -4.7}, "ACWI": {"change_percent": -0.4}},
+        benchmark_config=summarize.load_benchmark_config(),
+    )
+
+    assert "¥27830.00" in output
+    assert "$27830.00" not in output
+
+
+def test_fetch_portfolio_benchmark_quotes_deduplicates_fetch(monkeypatch):
+    portfolio_data = {
+        "stocks": {
+            "NVDA": {"info": {"category": "Technology"}},
+            "AMD": {"info": {"category": "Technology"}},
+        }
+    }
+    calls = []
+
+    def fake_fetch_market_data(symbols, **_kwargs):
+        calls.append(symbols)
+        return {symbol: {"change_percent": 1.0} for symbol in symbols}
+
+    monkeypatch.setattr(summarize, "fetch_market_data", fake_fetch_market_data)
+
+    quotes = summarize.fetch_portfolio_benchmark_quotes(portfolio_data, summarize.load_benchmark_config())
+
+    assert calls == [["SPY", "SOXX"]]
+    assert quotes["SOXX"]["change_percent"] == 1.0
 
 
 def test_build_briefing_summary_uses_name_for_international_mover(monkeypatch):

@@ -23,7 +23,13 @@ from utils import clamp_timeout, compute_deadline, ensure_venv, time_left
 
 ensure_venv()
 
-from fetch_news import PortfolioError, get_market_news, get_portfolio_movers, get_portfolio_news
+from fetch_news import PortfolioError, fetch_market_data, get_market_news, get_portfolio_movers, get_portfolio_news
+from portfolio_attribution import (
+    AttributionResult,
+    benchmark_tickers_for_portfolio,
+    build_attributions,
+    load_benchmark_config,
+)
 from ranking import rank_headlines
 from research import generate_research_content
 
@@ -182,6 +188,14 @@ def format_symbol_display(symbol: str, info: dict | None = None, portfolio_meta:
     if "." in symbol and name:
         return f"{name} ({symbol})"
     return symbol
+
+
+def format_price_for_currency(price: float | None, currency: str) -> str:
+    if not isinstance(price, (int, float)):
+        return "N/A"
+    symbols = {"USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥", "CHF": "CHF ", "CAD": "C$", "TWD": "NT$"}
+    prefix = symbols.get(currency, f"{currency} ")
+    return f"{prefix}{price:.2f}"
 
 LANG_PROMPTS = {
     "de": "Output must be in German only.",
@@ -1408,13 +1422,66 @@ def classify_sentiment(market_data: dict, portfolio_data: dict | None = None) ->
     }
 
 
+def fetch_portfolio_benchmark_quotes(
+    portfolio_data: dict,
+    benchmark_config: dict,
+    deadline: float | None = None,
+    subprocess_timeout: int = 30,
+) -> dict:
+    stocks = portfolio_data.get("stocks", {}) if isinstance(portfolio_data, dict) else {}
+    tickers = benchmark_tickers_for_portfolio(stocks, benchmark_config)
+    if not tickers:
+        return {}
+    return fetch_market_data(tickers, timeout=subprocess_timeout, deadline=deadline, allow_price_fallback=True)
+
+
+def _classification_label(result: AttributionResult, labels: dict) -> str:
+    class_map = labels.get("portfolio_classification_map", {})
+    if isinstance(class_map, dict):
+        return class_map.get(result.classification, result.classification)
+    return result.classification
+
+
+def _pct(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:+.1f}%"
+
+
+def _attribution_line(result: AttributionResult, labels: dict) -> str:
+    heading = labels.get("portfolio_attr_benchmark", "Attribution")
+    residual = labels.get("portfolio_attr_residual", "residual")
+    label = _classification_label(result, labels)
+    parts = [
+        f"{heading}: {label}",
+        f"{result.benchmark_label} {_pct(result.benchmark_change_pct)}",
+    ]
+    if result.residual_pct is not None:
+        parts.append(f"{residual} {_pct(result.residual_pct)}")
+    if result.currency_ticker and result.currency_change_pct is not None and abs(result.currency_change_pct) >= 1:
+        parts.append(f"{result.currency_ticker} {_pct(result.currency_change_pct)}")
+    if result.mapping_uncertain:
+        parts.append(labels.get("portfolio_attr_mapping_uncertain", "benchmark mapping uncertain"))
+    return "• " + "; ".join(parts)
+
+
+def _evidence_line(result: AttributionResult, labels: dict) -> str:
+    if result.evidence is None:
+        return f"• {labels.get('portfolio_attr_no_catalyst', 'No confirmed catalyst')}"
+    confidence = labels.get("portfolio_attr_confidence", "confidence")
+    title = result.evidence.title
+    if len(title) > 90:
+        title = f"{title[:87]}..."
+    return f"• {title} ({result.evidence.source}, {confidence}: {result.evidence.confidence})"
+
+
 def build_portfolio_message(
     portfolio_data: dict,
     labels: dict,
     language: str,
     deadline: float | None = None,
+    benchmark_quotes: dict | None = None,
+    benchmark_config: dict | None = None,
 ) -> str:
-    """Build a portfolio movers message with translated titles and source refs."""
+    """Build an attribution-first portfolio movers message."""
     if not portfolio_data:
         return ""
 
@@ -1422,80 +1489,23 @@ def build_portfolio_message(
     if not stocks_raw:
         return ""
 
-    portfolio_meta = load_portfolio_metadata()
     p_meta = portfolio_data.get("meta", {})
     total_stocks = p_meta.get("total_stocks")
     portfolio_header = labels.get("heading_portfolio_movers", "Portfolio Movers")
 
-    stocks = []
-    all_articles = []
-    for symbol, data in stocks_raw.items():
-        quote = data.get("quote", {})
-        change = quote.get("change_percent", 0) or 0
-        price = quote.get("price")
-        info = data.get("info") or {}
-        articles = data.get("articles", [])[:2]
-        stocks.append(
-            {
-                "symbol": symbol,
-                "display_symbol": format_symbol_display(symbol, info, portfolio_meta),
-                "change": change,
-                "price": price,
-                "articles": articles,
-            }
-        )
-        all_articles.extend(articles)
-
-    stocks.sort(key=lambda x: x["change"], reverse=True)
-
-    title_translations: dict[str, str] = {}
-    if language == "de" and all_articles:
-        titles_to_translate = []
-        for art in all_articles:
-            if art.get("title_de"):
-                continue
-            title = (art.get("title") or "").strip()
-            if title:
-                titles_to_translate.append(title)
-        titles_to_translate = list(dict.fromkeys(titles_to_translate))
-        if titles_to_translate:
-            translated, success = translate_headlines(titles_to_translate, deadline=deadline)
-            if success:
-                for orig, trans in zip(titles_to_translate, translated):
-                    title_translations[orig] = trans
-
     header_line = f"📊 **{portfolio_header}**"
-    if isinstance(total_stocks, int) and total_stocks > len(stocks):
-        header_line = f"{header_line} (Top {len(stocks)} of {total_stocks})"
+    if isinstance(total_stocks, int) and total_stocks > len(stocks_raw):
+        header_line = f"{header_line} (Top {len(stocks_raw)} of {total_stocks})"
     lines = [header_line]
 
-    ref_idx = 1
-    portfolio_sources: list[dict] = []
-
-    for stock in stocks:
-        emoji = "📈" if stock["change"] >= 0 else "📉"
-        price = stock["price"]
-        price_str = f"${price:.2f}" if isinstance(price, (int, float)) else "N/A"
-        lines.append(f"\n**{stock['display_symbol']}** {emoji} {price_str} ({stock['change']:+.2f}%)")
-
-        for art in stock["articles"]:
-            title = (art.get("title") or "").strip()
-            if not title:
-                continue
-            display_title = art.get("title_de") or title_translations.get(title, title)
-            link = (art.get("link") or "").strip()
-            if link:
-                lines.append(f"• {display_title} [{ref_idx}]")
-                portfolio_sources.append({"idx": ref_idx, "link": link})
-                ref_idx += 1
-            else:
-                lines.append(f"• {display_title}")
-
-    if portfolio_sources:
-        sources_header = labels.get("sources_header", "Sources")
-        lines.append(f"\n## {sources_header}\n")
-        for src in portfolio_sources:
-            lines.append(f"[{src['idx']}] {shorten_url(src['link'])}")
+    config = benchmark_config or load_benchmark_config()
+    attributions = build_attributions(stocks_raw, benchmark_quotes or {}, config)
+    for result in attributions:
+        emoji = "📈" if result.change_pct >= 0 else "📉"
+        price_str = format_price_for_currency(result.price, result.currency)
+        lines.append(f"\n**{result.display_symbol}** {emoji} {price_str} ({result.change_pct:+.2f}%)")
+        lines.append(_attribution_line(result, labels))
+        lines.append(_evidence_line(result, labels))
 
     return "\n".join(lines)
 
@@ -1936,7 +1946,25 @@ def generate_briefing(args):
     # Message 2: Portfolio (if available)
     portfolio_output = ""
     if portfolio_data:
-        portfolio_output = build_portfolio_message(portfolio_data, labels, language, deadline=deadline)
+        benchmark_config = load_benchmark_config()
+        try:
+            benchmark_quotes = fetch_portfolio_benchmark_quotes(
+                portfolio_data,
+                benchmark_config,
+                deadline=portfolio_deadline,
+                subprocess_timeout=subprocess_timeout,
+            )
+        except Exception as exc:
+            print(f"⚠️ Skipping portfolio benchmark quotes: {exc}", file=sys.stderr)
+            benchmark_quotes = {}
+        portfolio_output = build_portfolio_message(
+            portfolio_data,
+            labels,
+            language,
+            deadline=deadline,
+            benchmark_quotes=benchmark_quotes,
+            benchmark_config=benchmark_config,
+        )
         
     write_debug_once()
 
