@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Research Module - Deep research using MiniMax M2.5 (via minimax-prompt CLI).
+Research Module - Deep research using Ollama Kimi with Gemini CLI fallback.
 Crawls articles, finds correlations, researches companies.
 Outputs research_report.md for later analysis.
 """
@@ -21,6 +21,7 @@ from fetch_news import PortfolioError, get_market_news, get_portfolio_news
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_DIR = SCRIPT_DIR.parent / "config"
 OUTPUT_DIR = SCRIPT_DIR.parent / "research"
+DEFAULT_OLLAMA_KIMI_MODEL = "kimi-k2.6:cloud"
 
 
 ensure_venv()
@@ -80,30 +81,27 @@ def format_portfolio_news(portfolio_data: dict) -> str:
     return '\n'.join(lines)
 
 
-def minimax_prompt_available() -> bool:
-    return shutil.which('minimax-prompt') is not None
+def get_ollama_kimi_model() -> str:
+    return (
+        os.getenv("FINANCE_NEWS_OLLAMA_KIMI_MODEL")
+        or os.getenv("OLLAMA_KIMI_MODEL")
+        or DEFAULT_OLLAMA_KIMI_MODEL
+    ).strip()
+
+
+def ollama_available() -> bool:
+    return shutil.which('ollama') is not None
+
+
+def kimi_available() -> bool:
+    return ollama_available()
 
 
 def gemini_available() -> bool:
-    """Backward-compatible alias for legacy test/import surface."""
-    return minimax_prompt_available()
+    return shutil.which('gemini') is not None
 
 
-def research_with_gemini(content: str, focus_areas: list = None) -> str:
-    """Backward-compatible alias for legacy callers/tests."""
-    return research_with_minimax(content, focus_areas=focus_areas)
-
-
-def research_with_minimax(content: str, focus_areas: list = None) -> str:
-    """Perform deep research using minimax-prompt CLI (MiniMax M2.5 direct API).
-    
-    Args:
-        content: Combined market/headlines/portfolio content
-        focus_areas: Optional list of focus areas (e.g., ['earnings', 'macro', 'sectors'])
-    
-    Returns:
-        Research report text
-    """
+def build_research_prompt(content: str, focus_areas: list | None = None) -> str:
     focus_prompt = ""
     if focus_areas:
         focus_prompt = f"""
@@ -143,24 +141,43 @@ Please analyze the following market data:
 Be analytical, objective, and opinionated where appropriate.
 Deliver a substantial report (500-800 words).
 """
+    return prompt
 
+
+def run_prompt_command(command: list[str], prompt: str, timeout: int, error_label: str) -> str:
     try:
         result = subprocess.run(
-            ['minimax-prompt', prompt],
+            [*command, prompt],
             capture_output=True,
             text=True,
-            timeout=120
+            timeout=timeout
         )
 
         if result.returncode == 0:
             return result.stdout.strip()
-        else:
-            return f"⚠️ MiniMax research error: {result.stderr}"
+        return f"⚠️ {error_label}: {result.stderr}"
 
     except subprocess.TimeoutExpired:
-        return "⚠️ MiniMax research timeout"
+        return f"⚠️ {error_label}: timeout"
     except FileNotFoundError:
-        return "⚠️ minimax-prompt not found"
+        return f"⚠️ {error_label}: {command[0]} CLI not found"
+
+
+def research_with_kimi(content: str, focus_areas: list | None = None) -> str:
+    """Perform deep research using Ollama Kimi."""
+    prompt = build_research_prompt(content, focus_areas)
+    return run_prompt_command(
+        ["ollama", "run", get_ollama_kimi_model()],
+        prompt,
+        120,
+        "Kimi research error",
+    )
+
+
+def research_with_gemini(content: str, focus_areas: list | None = None) -> str:
+    """Perform deep research using Gemini CLI fallback."""
+    prompt = build_research_prompt(content, focus_areas)
+    return run_prompt_command(["gemini", "-p"], prompt, 120, "Gemini research error")
 
 
 def format_raw_data_report(market_data: dict, portfolio_data: dict) -> str:
@@ -181,11 +198,20 @@ def generate_research_content(market_data: dict, portfolio_data: dict, focus_are
             'report': '',
             'source': 'none'
         }
-    if minimax_prompt_available():
-        return {
-            'report': research_with_minimax(raw_report, focus_areas),
-            'source': 'minimax'
-        }
+    if kimi_available():
+        report = research_with_kimi(raw_report, focus_areas)
+        if not report.startswith("⚠️"):
+            return {
+                'report': report,
+                'source': 'kimi'
+            }
+    if gemini_available():
+        report = research_with_gemini(raw_report, focus_areas)
+        if not report.startswith("⚠️"):
+            return {
+                'report': report,
+                'source': 'gemini'
+            }
     return {
         'report': raw_report,
         'source': 'raw'
@@ -234,10 +260,12 @@ def generate_research_report(args):
         print("⚠️ No data available for research", file=sys.stderr)
         return
 
-    if source == 'minimax':
-        print("🔬 Running deep research with MiniMax...", file=sys.stderr)
+    if source == 'kimi':
+        print("🔬 Running deep research with Ollama Kimi...", file=sys.stderr)
+    elif source == 'gemini':
+        print("🔬 Running deep research with Gemini CLI...", file=sys.stderr)
     else:
-        print("🧾 MiniMax not available; using raw data report", file=sys.stderr)
+        print("🧾 LLM research unavailable; using raw data report", file=sys.stderr)
     
     # Add metadata header
     timestamp = datetime.now().isoformat()

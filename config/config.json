@@ -226,13 +226,16 @@
   },
   "llm": {
     "headline_model_order": [
-      "kimi"
+      "kimi",
+      "gemini"
     ],
     "summary_model_order": [
-      "kimi"
+      "kimi",
+      "gemini"
     ],
     "translation_model_order": [
-      "kimi"
+      "kimi",
+      "gemini"
     ]
   },
   "translations": {

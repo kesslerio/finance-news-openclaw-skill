@@ -17,9 +17,10 @@ from research import (
     format_raw_data_report,
     gemini_available,
     generate_research_content,
-    minimax_prompt_available,
+    kimi_available,
+    ollama_available,
     research_with_gemini,
-    research_with_minimax,
+    research_with_kimi,
 )
 
 
@@ -211,39 +212,45 @@ class TestFormatPortfolioNews:
         assert "## Portfolio Analysis" in result
 
 
-class TestMiniMaxAvailable:
-    """Tests for minimax_prompt_available()."""
+class TestProviderAvailability:
+    """Tests for local LLM provider availability."""
 
-    def test_returns_true_when_minimax_found(self):
-        """Return True when minimax-prompt CLI is found."""
-        with patch("shutil.which", return_value="/usr/local/bin/minimax-prompt"):
-            assert minimax_prompt_available() is True
+    def test_returns_true_when_ollama_found(self):
+        """Return True when ollama CLI is found."""
+        with patch("shutil.which", return_value="/usr/local/bin/ollama"):
+            assert ollama_available() is True
 
-    def test_returns_false_when_minimax_not_found(self):
-        """Return False when minimax-prompt CLI is not found."""
+    def test_returns_false_when_ollama_not_found(self):
+        """Return False when ollama CLI is not found."""
         with patch("shutil.which", return_value=None):
-            assert minimax_prompt_available() is False
+            assert ollama_available() is False
 
-    def test_gemini_available_aliases_minimax(self):
-        """Legacy availability helper remains an alias for MiniMax."""
-        with patch("shutil.which", return_value="/usr/local/bin/minimax-prompt"):
+    def test_kimi_available_aliases_ollama(self):
+        """Kimi availability is backed by Ollama."""
+        with patch("shutil.which", return_value="/usr/local/bin/ollama"):
+            assert kimi_available() is True
+
+    def test_gemini_available_checks_gemini(self):
+        """Gemini fallback availability checks gemini CLI."""
+        with patch("shutil.which", return_value="/usr/local/bin/gemini"):
             assert gemini_available() is True
 
 
-class TestResearchWithMiniMax:
-    """Tests for research_with_minimax()."""
+class TestResearchWithKimi:
+    """Tests for research_with_kimi()."""
 
     def test_successful_research(self):
-        """Execute MiniMax research successfully."""
+        """Execute Ollama Kimi research successfully."""
         mock_result = Mock()
         mock_result.returncode = 0
         mock_result.stdout = "# Research Report\n\nMarket analysis..."
 
         with patch("subprocess.run", return_value=mock_result) as mock_run:
-            result = research_with_minimax("Market data content")
+            result = research_with_kimi("Market data content")
 
             assert result == "# Research Report\n\nMarket analysis..."
             mock_run.assert_called_once()
+            assert mock_run.call_args[0][0][:3] == ["ollama", "run", "kimi-k2.6:cloud"]
 
     def test_research_with_focus_areas(self):
         """Include focus areas in prompt."""
@@ -252,49 +259,54 @@ class TestResearchWithMiniMax:
         mock_result.stdout = "Focused analysis"
 
         with patch("subprocess.run", return_value=mock_result) as mock_run:
-            result = research_with_minimax("content", focus_areas=["earnings", "macro"])
+            result = research_with_kimi("content", focus_areas=["earnings", "macro"])
 
             assert result == "Focused analysis"
             # Verify focus areas were in the prompt
             call_args = mock_run.call_args[0][0]
-            prompt = call_args[1]
+            prompt = call_args[-1]
             assert "earnings" in prompt
             assert "macro" in prompt
 
-    def test_handles_minimax_error(self):
-        """Handle MiniMax error gracefully."""
+    def test_handles_kimi_error(self):
+        """Handle Kimi error gracefully."""
         mock_result = Mock()
         mock_result.returncode = 1
         mock_result.stderr = "API error"
 
         with patch("subprocess.run", return_value=mock_result):
-            result = research_with_minimax("content")
+            result = research_with_kimi("content")
 
-            assert "⚠️ MiniMax research error" in result
+            assert "⚠️ Kimi research error" in result
             assert "API error" in result
 
     def test_handles_timeout(self):
         """Handle subprocess timeout."""
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="minimax-prompt", timeout=120)):
-            result = research_with_minimax("content")
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="ollama", timeout=120)):
+            result = research_with_kimi("content")
 
-            assert "⚠️ MiniMax research timeout" in result
+            assert "⚠️ Kimi research error: timeout" in result
 
-    def test_handles_missing_minimax(self):
-        """Handle missing minimax-prompt CLI."""
+    def test_handles_missing_ollama(self):
+        """Handle missing ollama CLI."""
         with patch("subprocess.run", side_effect=FileNotFoundError()):
-            result = research_with_minimax("content")
+            result = research_with_kimi("content")
 
-            assert "⚠️ minimax-prompt not found" in result
+            assert "⚠️ Kimi research error: ollama CLI not found" in result
 
-    def test_research_with_gemini_aliases_minimax(self):
-        """Legacy helper remains an alias for MiniMax callers."""
+
+class TestResearchWithGemini:
+    """Tests for research_with_gemini()."""
+
+    def test_research_with_gemini_uses_gemini_cli(self):
+        """Gemini fallback uses gemini -p."""
         mock_result = Mock()
         mock_result.returncode = 0
-        mock_result.stdout = "Alias report"
+        mock_result.stdout = "Gemini report"
 
-        with patch("subprocess.run", return_value=mock_result):
-            assert research_with_gemini("content") == "Alias report"
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            assert research_with_gemini("content") == "Gemini report"
+            assert mock_run.call_args[0][0][:2] == ["gemini", "-p"]
 
 
 class TestFormatRawDataReport:
@@ -332,20 +344,33 @@ class TestFormatRawDataReport:
 class TestGenerateResearchContent:
     """Tests for generate_research_content()."""
 
-    def test_uses_minimax_when_available(self, sample_market_data, sample_portfolio_data):
-        """Use MiniMax research when available."""
-        with patch("research.minimax_prompt_available", return_value=True):
-            with patch("research.research_with_minimax", return_value="MiniMax report") as mock_minimax:
+    def test_uses_kimi_when_available(self, sample_market_data, sample_portfolio_data):
+        """Use Kimi research when available."""
+        with patch("research.kimi_available", return_value=True):
+            with patch("research.research_with_kimi", return_value="Kimi report") as mock_kimi:
                 result = generate_research_content(sample_market_data, sample_portfolio_data)
 
-                assert result["report"] == "MiniMax report"
-                assert result["source"] == "minimax"
-                mock_minimax.assert_called_once()
+                assert result["report"] == "Kimi report"
+                assert result["source"] == "kimi"
+                mock_kimi.assert_called_once()
+
+    def test_falls_back_to_gemini_when_kimi_fails(self, sample_market_data, sample_portfolio_data):
+        """Use Gemini when Kimi is unavailable or fails."""
+        with patch("research.kimi_available", return_value=True):
+            with patch("research.research_with_kimi", return_value="⚠️ Kimi research error: timeout"):
+                with patch("research.gemini_available", return_value=True):
+                    with patch("research.research_with_gemini", return_value="Gemini report") as mock_gemini:
+                        result = generate_research_content(sample_market_data, sample_portfolio_data)
+
+                        assert result["report"] == "Gemini report"
+                        assert result["source"] == "gemini"
+                        mock_gemini.assert_called_once()
 
     def test_falls_back_to_raw_report(self, sample_market_data, sample_portfolio_data):
-        """Fall back to raw report when MiniMax unavailable."""
-        with patch("research.minimax_prompt_available", return_value=False):
-            result = generate_research_content(sample_market_data, sample_portfolio_data)
+        """Fall back to raw report when LLM providers are unavailable."""
+        with patch("research.kimi_available", return_value=False):
+            with patch("research.gemini_available", return_value=False):
+                result = generate_research_content(sample_market_data, sample_portfolio_data)
 
             assert "## Market Data" in result["report"]
             assert result["source"] == "raw"
@@ -357,15 +382,15 @@ class TestGenerateResearchContent:
         assert result["report"] == ""
         assert result["source"] == "none"
 
-    def test_passes_focus_areas_to_minimax(self, sample_market_data, sample_portfolio_data):
-        """Pass focus areas to MiniMax research."""
+    def test_passes_focus_areas_to_kimi(self, sample_market_data, sample_portfolio_data):
+        """Pass focus areas to Kimi research."""
         focus = ["earnings", "tech"]
-        with patch("research.minimax_prompt_available", return_value=True):
-            with patch("research.research_with_minimax", return_value="Report") as mock_minimax:
+        with patch("research.kimi_available", return_value=True):
+            with patch("research.research_with_kimi", return_value="Report") as mock_kimi:
                 generate_research_content(sample_market_data, sample_portfolio_data, focus_areas=focus)
 
-                mock_minimax.assert_called_once()
+                mock_kimi.assert_called_once()
                 # Check that focus_areas was passed (positional or keyword)
-                call_args = mock_minimax.call_args
+                call_args = mock_kimi.call_args
                 # Focus areas passed as second positional arg
                 assert call_args[0][1] == focus or call_args.kwargs.get("focus_areas") == focus
