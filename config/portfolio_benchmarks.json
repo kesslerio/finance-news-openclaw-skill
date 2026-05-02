@@ -1,0 +1,114 @@
+{
+  "broad_markets": {
+    "default": {"ticker": "ACWI", "label": "Global equities"},
+    "US": {"ticker": "SPY", "label": "S&P 500"},
+    "Japan": {"ticker": "EWJ", "label": "Japan equities"},
+    "Europe": {"ticker": "VGK", "label": "Europe equities"},
+    "China": {"ticker": "MCHI", "label": "China equities"},
+    "Taiwan": {"ticker": "EWT", "label": "Taiwan equities"},
+    "Canada": {"ticker": "EWC", "label": "Canada equities"},
+    "Switzerland": {"ticker": "EWL", "label": "Switzerland equities"}
+  },
+  "categories": {
+    "Technology": {"ticker": "XLK", "label": "US technology"},
+    "Tech": {"ticker": "XLK", "label": "US technology"},
+    "Semiconductors": {"ticker": "SOXX", "label": "Semiconductors"},
+    "Semiconductor Equipment": {"ticker": "SOXX", "label": "Semiconductors"},
+    "KI-Infrastructure": {"ticker": "SOXX", "label": "Semiconductors"},
+    "AI/Data": {"ticker": "XLK", "label": "US technology"},
+    "Healthcare": {"ticker": "XLV", "label": "US health care"},
+    "Finance": {"ticker": "XLF", "label": "US financials"},
+    "Financials": {"ticker": "XLF", "label": "US financials"},
+    "Industrials": {"ticker": "XLI", "label": "US industrials"},
+    "Consumer": {"ticker": "XLY", "label": "US consumer discretionary"},
+    "Consumer Discretionary": {"ticker": "XLY", "label": "US consumer discretionary"},
+    "Consumer Staples": {"ticker": "XLP", "label": "US consumer staples"},
+    "Energy": {"ticker": "XLE", "label": "US energy"},
+    "Materials": {"ticker": "XLB", "label": "US materials"},
+    "Real Estate": {"ticker": "XLRE", "label": "US real estate"},
+    "Utilities": {"ticker": "XLU", "label": "US utilities"},
+    "Communication Services": {"ticker": "XLC", "label": "US communication services"}
+  },
+  "themes": {
+    "AI Infrastructure": {"ticker": "SOXX", "label": "Semiconductors"},
+    "Advanced Manufacturing": {"ticker": "SOXX", "label": "Semiconductors"},
+    "Cloud": {"ticker": "XLK", "label": "US technology"},
+    "Cybersecurity": {"ticker": "XLK", "label": "US technology"},
+    "Digital Payments": {"ticker": "XLF", "label": "US financials"},
+    "Japan Reform": {"ticker": "EWJ", "label": "Japan equities"},
+    "GLP-1 Ecosystem": {"ticker": "XLV", "label": "US health care"}
+  },
+  "ticker_overrides": {
+    "NVDA": {"ticker": "SOXX", "label": "Semiconductors"},
+    "AMD": {"ticker": "SOXX", "label": "Semiconductors"},
+    "AVGO": {"ticker": "SOXX", "label": "Semiconductors"},
+    "AMAT": {"ticker": "SOXX", "label": "Semiconductor equipment"},
+    "ASML": {"ticker": "SOXX", "label": "Semiconductor equipment"},
+    "KLAC": {"ticker": "SOXX", "label": "Semiconductor equipment"},
+    "LRCX": {"ticker": "SOXX", "label": "Semiconductor equipment"},
+    "CDNS": {"ticker": "SOXX", "label": "Semiconductor design/software"},
+    "SNPS": {"ticker": "SOXX", "label": "Semiconductor design/software"},
+    "5803.T": {"ticker": "EWJ", "label": "Japan equities"},
+    "6861.T": {"ticker": "EWJ", "label": "Japan equities"},
+    "7741.T": {"ticker": "EWJ", "label": "Japan equities"},
+    "8001.T": {"ticker": "EWJ", "label": "Japan equities"},
+    "8058.T": {"ticker": "EWJ", "label": "Japan equities"}
+  },
+  "ticker_suffix_regions": {
+    ".A": "US",
+    ".B": "US",
+    ".T": "Japan",
+    ".TW": "Taiwan",
+    ".DE": "Europe",
+    ".PA": "Europe",
+    ".AS": "Europe",
+    ".SW": "Switzerland",
+    ".TO": "Canada",
+    ".V": "Canada"
+  },
+  "currency_proxies": {
+    ".T": {"ticker": "JPY=X", "label": "USD/JPY"},
+    ".TW": {"ticker": "TWD=X", "label": "USD/TWD"},
+    ".DE": {"ticker": "EURUSD=X", "label": "EUR/USD"},
+    ".PA": {"ticker": "EURUSD=X", "label": "EUR/USD"},
+    ".AS": {"ticker": "EURUSD=X", "label": "EUR/USD"},
+    ".SW": {"ticker": "CHF=X", "label": "USD/CHF"},
+    ".TO": {"ticker": "CAD=X", "label": "USD/CAD"},
+    ".V": {"ticker": "CAD=X", "label": "USD/CAD"}
+  },
+  "source_quality": {
+    "allowed_sources": [
+      "Reuters",
+      "Wall Street Journal",
+      "WSJ",
+      "Financial Times",
+      "FT",
+      "Bloomberg",
+      "CNBC",
+      "MarketWatch",
+      "Handelsblatt",
+      "Tagesschau",
+      "ZEIT"
+    ],
+    "allowed_domains": [
+      "reuters.com",
+      "wsj.com",
+      "ft.com",
+      "bloomberg.com",
+      "cnbc.com",
+      "marketwatch.com",
+      "handelsblatt.com",
+      "tagesschau.de",
+      "zeit.de"
+    ],
+    "blocked_domains": [
+      "finance.yahoo.com",
+      "yahoo.com",
+      "fool.com",
+      "benzinga.com",
+      "zacks.com",
+      "investorplace.com",
+      "seekingalpha.com"
+    ]
+  }
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 News Summarizer - Generate market briefings in configurable language.
-Uses direct Kimi API calls for briefing generation.
+Uses local Ollama Kimi for briefing generation with Gemini CLI fallback.
 """
 
 import argparse
@@ -10,7 +10,7 @@ import os
 import re
 import subprocess
 import sys
-import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -18,12 +18,17 @@ from pathlib import Path
 
 import urllib.parse
 import urllib.request
-from urllib.error import HTTPError, URLError
 from utils import clamp_timeout, compute_deadline, ensure_venv, time_left
 
 ensure_venv()
 
-from fetch_news import PortfolioError, get_market_news, get_portfolio_movers, get_portfolio_news
+from fetch_news import PortfolioError, fetch_market_data, get_market_news, get_portfolio_movers, get_portfolio_news
+from portfolio_attribution import (
+    AttributionResult,
+    benchmark_tickers_for_portfolio,
+    build_attributions,
+    load_benchmark_config,
+)
 from ranking import rank_headlines
 from research import generate_research_content
 
@@ -34,9 +39,8 @@ PORTFOLIO_MOVER_MAX = 8
 PORTFOLIO_MOVER_MIN_ABS_CHANGE = 1.0
 MAX_HEADLINES_IN_PROMPT = 10
 TOP_HEADLINES_COUNT = 5
-DEFAULT_LLM_FALLBACK = ["kimi"]
-DEFAULT_KIMI_BASE_URL = "https://api.kimi.com/coding/"
-DEFAULT_KIMI_MODEL = "k2p5"
+DEFAULT_LLM_FALLBACK = ["kimi", "gemini"]
+DEFAULT_OLLAMA_KIMI_MODEL = "kimi-k2.6:cloud"
 HEADLINE_SHORTLIST_SIZE = 20
 HEADLINE_MERGE_THRESHOLD = 0.82
 HEADLINE_MAX_AGE_HOURS = 72
@@ -52,7 +56,7 @@ INTL_TICKER_NAME_OVERRIDES = {
     "8411.T": "Mizuho Financial",
 }
 
-SUPPORTED_MODELS = {"kimi"}
+SUPPORTED_MODELS = {"kimi", "gemini"}
 
 # Portfolio prioritization weights
 PORTFOLIO_PRIORITY_WEIGHTS = {
@@ -140,6 +144,14 @@ def parse_model_list(raw: str | None, default: list[str]) -> list[str]:
     return result or default
 
 
+def get_ollama_kimi_model() -> str:
+    return (
+        os.getenv("FINANCE_NEWS_OLLAMA_KIMI_MODEL")
+        or os.getenv("OLLAMA_KIMI_MODEL")
+        or DEFAULT_OLLAMA_KIMI_MODEL
+    ).strip()
+
+
 def ticker_to_name(symbol: str, portfolio_meta: dict | None = None) -> str:
     if not symbol:
         return ""
@@ -182,6 +194,14 @@ def format_symbol_display(symbol: str, info: dict | None = None, portfolio_meta:
     if "." in symbol and name:
         return f"{name} ({symbol})"
     return symbol
+
+
+def format_price_for_currency(price: float | None, currency: str) -> str:
+    if not isinstance(price, (int, float)):
+        return "N/A"
+    symbols = {"USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥", "CHF": "CHF ", "CAD": "C$", "TWD": "NT$"}
+    prefix = symbols.get(currency, f"{currency} ")
+    return f"{prefix}{price:.2f}"
 
 LANG_PROMPTS = {
     "de": "Output must be in German only.",
@@ -385,42 +405,72 @@ def extract_agent_reply(raw: str) -> str:
     return raw.strip()
 
 
-def run_agent_prompt(prompt: str, deadline: float | None = None, session_id: str = "finance-news-headlines", timeout: int = 45) -> str:
-    """Run a short prompt against openclaw agent and return raw reply text.
-
-    Uses the gateway's configured default model with automatic fallback.
-    Model selection is configured in openclaw.json, not per-request.
-    """
+def _run_prompt_command(
+    command: list[str],
+    prompt: str,
+    deadline: float | None,
+    timeout: int,
+    error_label: str,
+) -> str:
     try:
-        cli_timeout = clamp_timeout(timeout, deadline)
-        proc_timeout = clamp_timeout(timeout + 10, deadline)
-        cmd = [
-            'openclaw', 'agent',
-            '--session-id', session_id,
-            '--message', prompt,
-            '--json',
-            '--timeout', str(cli_timeout)
-        ]
+        proc_timeout = clamp_timeout(timeout, deadline)
         result = subprocess.run(
-            cmd,
+            [*command, prompt],
             capture_output=True,
             text=True,
             timeout=proc_timeout
         )
     except subprocess.TimeoutExpired:
-        return "⚠️ LLM error: timeout"
+        return f"⚠️ {error_label}: timeout"
     except TimeoutError:
-        return "⚠️ LLM error: deadline exceeded"
+        return f"⚠️ {error_label}: deadline exceeded"
     except FileNotFoundError:
-        return "⚠️ LLM error: openclaw CLI not found"
+        return f"⚠️ {error_label}: {command[0]} CLI not found"
     except OSError as exc:
-        return f"⚠️ LLM error: {exc}"
+        return f"⚠️ {error_label}: {exc}"
 
     if result.returncode == 0:
-        return extract_agent_reply(result.stdout)
+        return result.stdout.strip()
 
     stderr = result.stderr.strip() or "unknown error"
-    return f"⚠️ LLM error: {stderr}"
+    return f"⚠️ {error_label}: {stderr}"
+
+
+def run_ollama_kimi_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
+    model = get_ollama_kimi_model()
+    return _run_prompt_command(
+        ["ollama", "run", model],
+        prompt,
+        deadline,
+        timeout,
+        "Kimi briefing error",
+    )
+
+
+def run_gemini_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
+    return _run_prompt_command(
+        ["gemini", "-p"],
+        prompt,
+        deadline,
+        timeout,
+        "Gemini briefing error",
+    )
+
+
+def run_agent_prompt(
+    prompt: str,
+    deadline: float | None = None,
+    session_id: str = "finance-news-headlines",
+    timeout: int = 45,
+) -> str:
+    """Run a prompt through Ollama Kimi, then Gemini CLI if Kimi fails."""
+    del session_id
+    reply = run_ollama_kimi_prompt(prompt, deadline=deadline, timeout=timeout)
+    if not reply.startswith("⚠️"):
+        return reply
+
+    print(f"  ↳ {reply}; falling back to gemini -p", file=sys.stderr)
+    return run_gemini_prompt(prompt, deadline=deadline, timeout=timeout)
 
 
 def normalize_title(title: str) -> str:
@@ -880,11 +930,11 @@ def select_top_headlines(
             titles = [item["title"] for item in missing]
             translated, success = translate_headlines(titles, deadline=deadline)
             if success:
-                translation_used = "gateway"  # Model selected by gateway
+                translation_used = "llm"
                 for item, translated_title in zip(missing, translated):
                     item["title_de"] = translated_title
 
-    return selected, shortlist, "gateway", translation_used
+    return selected, shortlist, "llm", translation_used
 
 
 def select_top_headline_ids(shortlist: list[dict], deadline: float | None) -> list[int]:
@@ -939,36 +989,23 @@ def translate_headlines(
 ) -> tuple[list[str], bool]:
     """Translate headlines to German using LLM.
 
-    Uses gateway's configured model with automatic fallback.
+    Uses local Ollama Kimi first, then Gemini CLI.
     Returns (translated_titles, success) or (original_titles, False) on failure.
     """
     if not titles:
         return [], True
 
     print(f"🔤 Translating {len(titles)} headlines...", file=sys.stderr)
-    translated, success = translate_via_minimax_api(titles, deadline=deadline)
+    translated, success = translate_via_ollama_kimi(titles, deadline=deadline)
     if success:
-        print("  ↳ ✅ Translation successful via MiniMax API", file=sys.stderr)
+        print("  ↳ ✅ Translation successful via Ollama Kimi", file=sys.stderr)
         return translated, True
 
-    print("  ↳ MiniMax API failed, falling back to openclaw agent", file=sys.stderr)
-    prompt = _build_translation_prompt(titles)
-
-    reply = run_agent_prompt(prompt, deadline=deadline, session_id="finance-news-translate", timeout=60)
-
-    if reply.startswith("⚠️"):
-        print(f"  ↳ Translation failed: {reply}", file=sys.stderr)
-        return titles, False
-
-    data = parse_translation_array(reply)
-    if data is None:
-        print("  ↳ Invalid JSON translation format from openclaw", file=sys.stderr)
-        print(f"     Reply was: {reply[:200]}...", file=sys.stderr)
-        return titles, False
-    if len(data) == len(titles):
-        print("  ↳ ✅ Translation successful via openclaw agent", file=sys.stderr)
-        return data, True
-    print(f"  ↳ Returned {len(data)} items, expected {len(titles)}", file=sys.stderr)
+    print("  ↳ Ollama Kimi failed, falling back to gemini -p", file=sys.stderr)
+    translated, success = translate_via_gemini_cli(titles, deadline=deadline)
+    if success:
+        print("  ↳ ✅ Translation successful via Gemini CLI", file=sys.stderr)
+        return translated, True
 
     return titles, False
 
@@ -1005,87 +1042,43 @@ def _extract_anthropic_text(body: dict) -> str | None:
     return reply_text or None
 
 
-_MINIMAX_MAX_RETRIES = 2
-
-
-def translate_via_minimax_api(
+def _translate_via_prompt_runner(
     titles: list[str],
     deadline: float | None,
+    runner: Callable[[str, float | None, int], str],
+    provider: str,
 ) -> tuple[list[str], bool]:
-    """Translate headlines using MiniMax Anthropic API with retry on transient errors."""
     if not titles:
         return [], True
 
-    api_key = (os.getenv("MINIMAX_CODING_PLAN_API_KEY") or "").strip()
-    if not api_key:
-        print("  ↳ MINIMAX_CODING_PLAN_API_KEY not set, skipping API translation", file=sys.stderr)
+    prompt = _build_translation_prompt(titles)
+    reply = runner(prompt, deadline, 60)
+    if reply.startswith("⚠️"):
+        print(f"  ↳ {provider} translation failed: {reply}", file=sys.stderr)
         return titles, False
 
-    prompt = _build_translation_prompt(titles)
-    payload = json.dumps({
-        "model": "MiniMax-M2.5",
-        "max_tokens": 4096,
-        "messages": [{"role": "user", "content": prompt}],
-    }).encode("utf-8")
+    translated = parse_translation_array(reply)
+    if translated is None:
+        print(f"  ↳ {provider} returned unparseable translation: {reply[:200]}", file=sys.stderr)
+        return titles, False
+    if len(translated) != len(titles):
+        print(f"  ↳ {provider} returned {len(translated)} items, expected {len(titles)}", file=sys.stderr)
+        return titles, False
+    return translated, True
 
-    url = "https://api.minimax.io/anthropic/v1/messages"
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-    }
 
-    # Scale timeout with headline count: base 5s + 0.5s per headline, max 30s
-    base_timeout = min(30, 5 + len(titles) * 0.5)
+def translate_via_ollama_kimi(
+    titles: list[str],
+    deadline: float | None,
+) -> tuple[list[str], bool]:
+    return _translate_via_prompt_runner(titles, deadline, run_ollama_kimi_prompt, "Ollama Kimi")
 
-    last_error = None
-    for attempt in range(_MINIMAX_MAX_RETRIES + 1):
-        req = urllib.request.Request(
-            url=url, data=payload, headers=headers, method="POST",
-        )
-        try:
-            timeout = clamp_timeout(base_timeout, deadline)
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                raw = response.read().decode("utf-8")
-            body = json.loads(raw)
-        except HTTPError as e:
-            last_error = f"HTTP {e.code}"
-            if e.code in (429, 500, 502, 503) and attempt < _MINIMAX_MAX_RETRIES:
-                wait = 1.0 * (attempt + 1)
-                print(f"  ↳ MiniMax API {last_error}, retrying in {wait}s (attempt {attempt + 1}/{_MINIMAX_MAX_RETRIES + 1})", file=sys.stderr)
-                time.sleep(wait)
-                continue
-            print(f"  ↳ MiniMax API error: {last_error}", file=sys.stderr)
-            return titles, False
-        except (TimeoutError, URLError, OSError) as e:
-            last_error = f"{type(e).__name__}: {e}"
-            if attempt < _MINIMAX_MAX_RETRIES:
-                wait = 1.0 * (attempt + 1)
-                print(f"  ↳ MiniMax API {last_error}, retrying in {wait}s", file=sys.stderr)
-                time.sleep(wait)
-                continue
-            print(f"  ↳ MiniMax API error after {_MINIMAX_MAX_RETRIES + 1} attempts: {last_error}", file=sys.stderr)
-            return titles, False
-        except json.JSONDecodeError as e:
-            print(f"  ↳ MiniMax API returned invalid JSON: {e}", file=sys.stderr)
-            return titles, False
 
-        reply_text = _extract_anthropic_text(body)
-        if not reply_text:
-            print("  ↳ MiniMax API returned empty response", file=sys.stderr)
-            return titles, False
-
-        translated = parse_translation_array(reply_text)
-        if translated is None:
-            print(f"  ↳ MiniMax API returned unparseable translation: {reply_text[:200]}", file=sys.stderr)
-            return titles, False
-        if len(translated) != len(titles):
-            print(f"  ↳ MiniMax API returned {len(translated)} items, expected {len(titles)}", file=sys.stderr)
-            return titles, False
-        return translated, True
-
-    print(f"  ↳ MiniMax API exhausted retries: {last_error}", file=sys.stderr)
-    return titles, False
+def translate_via_gemini_cli(
+    titles: list[str],
+    deadline: float | None,
+) -> tuple[list[str], bool]:
+    return _translate_via_prompt_runner(titles, deadline, run_gemini_prompt, "Gemini CLI")
 
 
 def translate_headline_items(headlines: list[dict], deadline: float | None) -> bool:
@@ -1118,14 +1111,7 @@ def translate_headline_items(headlines: list[dict], deadline: float | None) -> b
 
 
 
-def summarize_with_kimi(
-    content: str,
-    language: str = "de",
-    style: str = "briefing",
-    deadline: float | None = None,
-) -> str:
-    """Generate AI summary using Kimi Coding API directly."""
-
+def _build_summary_prompt(content: str, language: str, style: str) -> str:
     style_prompt = STYLE_PROMPTS.get(style, STYLE_PROMPTS['briefing'])
     if style == "briefing":
         labels = load_translations(load_config()).get(language, {})
@@ -1159,7 +1145,7 @@ Rules:
 - Max 200 words total.
 - Use emojis sparingly."""
 
-    prompt = f"""{style_prompt}
+    return f"""{style_prompt}
 
 {LANG_PROMPTS.get(language, LANG_PROMPTS['de'])}
 
@@ -1168,46 +1154,33 @@ Here are the current market items:
 {content}
 """
 
-    api_key = (os.getenv("KIMI_API_KEY") or "").strip()
-    if not api_key:
-        return "⚠️ Kimi briefing error: KIMI_API_KEY not set"
 
-    base_url = (os.getenv("KIMI_API_BASE_URL") or DEFAULT_KIMI_BASE_URL).strip() or DEFAULT_KIMI_BASE_URL
-    model = (os.getenv("FINANCE_NEWS_KIMI_MODEL") or DEFAULT_KIMI_MODEL).strip() or DEFAULT_KIMI_MODEL
-    url = urllib.parse.urljoin(base_url.rstrip("/") + "/", "v1/messages")
+def summarize_with_kimi(
+    content: str,
+    language: str = "de",
+    style: str = "briefing",
+    deadline: float | None = None,
+) -> str:
+    """Generate AI summary using Ollama Kimi."""
+    prompt = _build_summary_prompt(content, language, style)
+    reply_text = run_ollama_kimi_prompt(prompt, deadline=deadline, timeout=60)
+    if reply_text.startswith("⚠️"):
+        return reply_text
+    return reply_text + format_disclaimer(language)
 
-    payload = json.dumps({
-        "model": model,
-        "max_tokens": 8192,
-        "messages": [{"role": "user", "content": prompt}],
-    }).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-    }
 
-    try:
-        timeout = clamp_timeout(60, deadline)
-        req = urllib.request.Request(
-            url=url, data=payload, headers=headers, method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            raw = response.read().decode("utf-8")
-        body = json.loads(raw)
-    except HTTPError as e:
-        return f"⚠️ Kimi briefing error: HTTP {e.code}"
-    except (TimeoutError, URLError, OSError) as e:
-        return f"⚠️ Kimi briefing error: {e}"
-    except json.JSONDecodeError as e:
-        return f"⚠️ Kimi briefing error: invalid JSON: {e}"
-
-    reply_text = _extract_anthropic_text(body)
-    if not reply_text:
-        return "⚠️ Kimi briefing error: empty response"
-
-    reply_text += format_disclaimer(language)
-    return reply_text
+def summarize_with_gemini(
+    content: str,
+    language: str = "de",
+    style: str = "briefing",
+    deadline: float | None = None,
+) -> str:
+    """Generate AI summary using Gemini CLI fallback."""
+    prompt = _build_summary_prompt(content, language, style)
+    reply_text = run_gemini_prompt(prompt, deadline=deadline, timeout=60)
+    if reply_text.startswith("⚠️"):
+        return reply_text
+    return reply_text + format_disclaimer(language)
 
 
 def format_market_data(market_data: dict) -> str:
@@ -1408,13 +1381,66 @@ def classify_sentiment(market_data: dict, portfolio_data: dict | None = None) ->
     }
 
 
+def fetch_portfolio_benchmark_quotes(
+    portfolio_data: dict,
+    benchmark_config: dict,
+    deadline: float | None = None,
+    subprocess_timeout: int = 30,
+) -> dict:
+    stocks = portfolio_data.get("stocks", {}) if isinstance(portfolio_data, dict) else {}
+    tickers = benchmark_tickers_for_portfolio(stocks, benchmark_config)
+    if not tickers:
+        return {}
+    return fetch_market_data(tickers, timeout=subprocess_timeout, deadline=deadline, allow_price_fallback=True)
+
+
+def _classification_label(result: AttributionResult, labels: dict) -> str:
+    class_map = labels.get("portfolio_classification_map", {})
+    if isinstance(class_map, dict):
+        return class_map.get(result.classification, result.classification)
+    return result.classification
+
+
+def _pct(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:+.1f}%"
+
+
+def _attribution_line(result: AttributionResult, labels: dict) -> str:
+    heading = labels.get("portfolio_attr_benchmark", "Attribution")
+    residual = labels.get("portfolio_attr_residual", "residual")
+    label = _classification_label(result, labels)
+    parts = [
+        f"{heading}: {label}",
+        f"{result.benchmark_label} {_pct(result.benchmark_change_pct)}",
+    ]
+    if result.residual_pct is not None:
+        parts.append(f"{residual} {_pct(result.residual_pct)}")
+    if result.currency_ticker and result.currency_change_pct is not None and abs(result.currency_change_pct) >= 1:
+        parts.append(f"{result.currency_ticker} {_pct(result.currency_change_pct)}")
+    if result.mapping_uncertain:
+        parts.append(labels.get("portfolio_attr_mapping_uncertain", "benchmark mapping uncertain"))
+    return "• " + "; ".join(parts)
+
+
+def _evidence_line(result: AttributionResult, labels: dict) -> str:
+    if result.evidence is None:
+        return f"• {labels.get('portfolio_attr_no_catalyst', 'No confirmed catalyst')}"
+    confidence = labels.get("portfolio_attr_confidence", "confidence")
+    title = result.evidence.title
+    if len(title) > 90:
+        title = f"{title[:87]}..."
+    return f"• {title} ({result.evidence.source}, {confidence}: {result.evidence.confidence})"
+
+
 def build_portfolio_message(
     portfolio_data: dict,
     labels: dict,
     language: str,
     deadline: float | None = None,
+    benchmark_quotes: dict | None = None,
+    benchmark_config: dict | None = None,
 ) -> str:
-    """Build a portfolio movers message with translated titles and source refs."""
+    """Build an attribution-first portfolio movers message."""
     if not portfolio_data:
         return ""
 
@@ -1422,80 +1448,23 @@ def build_portfolio_message(
     if not stocks_raw:
         return ""
 
-    portfolio_meta = load_portfolio_metadata()
     p_meta = portfolio_data.get("meta", {})
     total_stocks = p_meta.get("total_stocks")
     portfolio_header = labels.get("heading_portfolio_movers", "Portfolio Movers")
 
-    stocks = []
-    all_articles = []
-    for symbol, data in stocks_raw.items():
-        quote = data.get("quote", {})
-        change = quote.get("change_percent", 0) or 0
-        price = quote.get("price")
-        info = data.get("info") or {}
-        articles = data.get("articles", [])[:2]
-        stocks.append(
-            {
-                "symbol": symbol,
-                "display_symbol": format_symbol_display(symbol, info, portfolio_meta),
-                "change": change,
-                "price": price,
-                "articles": articles,
-            }
-        )
-        all_articles.extend(articles)
-
-    stocks.sort(key=lambda x: x["change"], reverse=True)
-
-    title_translations: dict[str, str] = {}
-    if language == "de" and all_articles:
-        titles_to_translate = []
-        for art in all_articles:
-            if art.get("title_de"):
-                continue
-            title = (art.get("title") or "").strip()
-            if title:
-                titles_to_translate.append(title)
-        titles_to_translate = list(dict.fromkeys(titles_to_translate))
-        if titles_to_translate:
-            translated, success = translate_headlines(titles_to_translate, deadline=deadline)
-            if success:
-                for orig, trans in zip(titles_to_translate, translated):
-                    title_translations[orig] = trans
-
     header_line = f"📊 **{portfolio_header}**"
-    if isinstance(total_stocks, int) and total_stocks > len(stocks):
-        header_line = f"{header_line} (Top {len(stocks)} of {total_stocks})"
+    if isinstance(total_stocks, int) and total_stocks > len(stocks_raw):
+        header_line = f"{header_line} (Top {len(stocks_raw)} of {total_stocks})"
     lines = [header_line]
 
-    ref_idx = 1
-    portfolio_sources: list[dict] = []
-
-    for stock in stocks:
-        emoji = "📈" if stock["change"] >= 0 else "📉"
-        price = stock["price"]
-        price_str = f"${price:.2f}" if isinstance(price, (int, float)) else "N/A"
-        lines.append(f"\n**{stock['display_symbol']}** {emoji} {price_str} ({stock['change']:+.2f}%)")
-
-        for art in stock["articles"]:
-            title = (art.get("title") or "").strip()
-            if not title:
-                continue
-            display_title = art.get("title_de") or title_translations.get(title, title)
-            link = (art.get("link") or "").strip()
-            if link:
-                lines.append(f"• {display_title} [{ref_idx}]")
-                portfolio_sources.append({"idx": ref_idx, "link": link})
-                ref_idx += 1
-            else:
-                lines.append(f"• {display_title}")
-
-    if portfolio_sources:
-        sources_header = labels.get("sources_header", "Sources")
-        lines.append(f"\n## {sources_header}\n")
-        for src in portfolio_sources:
-            lines.append(f"[{src['idx']}] {shorten_url(src['link'])}")
+    config = benchmark_config or load_benchmark_config()
+    attributions = build_attributions(stocks_raw, benchmark_quotes or {}, config)
+    for result in attributions:
+        emoji = "📈" if result.change_pct >= 0 else "📉"
+        price_str = format_price_for_currency(result.price, result.currency)
+        lines.append(f"\n**{result.display_symbol}** {emoji} {price_str} ({result.change_pct:+.2f}%)")
+        lines.append(_attribution_line(result, labels))
+        lines.append(_evidence_line(result, labels))
 
     return "\n".join(lines)
 
@@ -1696,8 +1665,8 @@ def generate_briefing(args):
         headline_max_age_hours=headline_max_age,
     )
 
-    # Model selection is now handled by the openclaw gateway (configured in openclaw.json)
-    # Environment variables for model override are deprecated
+    # Headline selection uses deterministic ranking first; the LLM path uses
+    # local Ollama Kimi with Gemini CLI fallback.
 
     shortlist_by_lang = config.get("headline_shortlist_size_by_lang", {})
     shortlist_size = HEADLINE_SHORTLIST_SIZE
@@ -1709,7 +1678,7 @@ def generate_briefing(args):
     remaining = time_left(deadline)
     if remaining is not None and remaining < 12:
         headline_deadline = compute_deadline(12)
-    # Select top headlines (model selection handled by gateway)
+    # Select top headlines.
     top_headlines, headline_shortlist, headline_model_used, translation_model_used = select_top_headlines(
         market_data.get("headlines", []),
         language=language,
@@ -1814,7 +1783,7 @@ def generate_briefing(args):
     else:
         content = raw_content
 
-    model = getattr(args, 'model', DEFAULT_KIMI_MODEL)
+    model = getattr(args, 'model', "kimi")
     # Kimi is the active writer for the supported summary styles. The outer
     # caller may still pass --llm, but briefing no longer relies on that flag
     # to enter the AI path.
@@ -1832,9 +1801,6 @@ def generate_briefing(args):
             summary_list = [summary_primary] + [m for m in summary_list if m != summary_primary]
     if use_llm and model and model in SUPPORTED_MODELS:
         summary_list = [model] + [m for m in summary_list if m != model]
-    if args.style == "briefing":
-        summary_list = [m for m in summary_list if m == "kimi"] or ["kimi"]
-
     summary_mode = "deterministic"
     summary_model_used = "deterministic"
     summary = ""
@@ -1859,13 +1825,15 @@ def generate_briefing(args):
                 "summary_model_attempts": summary_list,
             })
     else:
-        print(f"🤖 Generating Kimi summary with model order: {', '.join(summary_list)}", file=sys.stderr)
+        print(f"🤖 Generating summary with model order: {', '.join(summary_list)}", file=sys.stderr)
         summary_used = None
         summary_mode = "llm"
         summary_model_used = "llm_failed"
         for candidate in summary_list:
             if candidate == "kimi":
                 summary = summarize_with_kimi(content, language, args.style, deadline=deadline)
+            elif candidate == "gemini":
+                summary = summarize_with_gemini(content, language, args.style, deadline=deadline)
             else:
                 summary = f"⚠️ Unsupported summary model: {candidate}"
 
@@ -1877,13 +1845,13 @@ def generate_briefing(args):
             print(summary, file=sys.stderr)
 
         if not summary_used:
-            raise RuntimeError(last_summary_error or "Kimi summary generation failed")
+            raise RuntimeError(last_summary_error or "Summary generation failed")
 
     summary_structure_ok = True
     summary_missing_sections: list[str] = []
     if args.style == "briefing":
-        if summary_mode != "llm" or summary_model_used != "kimi":
-            raise RuntimeError(f"Briefing requires Kimi writer, got {summary_model_used}")
+        if summary_mode != "llm":
+            raise RuntimeError(f"Briefing requires LLM writer, got {summary_model_used}")
         summary_structure_ok, summary_missing_sections = validate_briefing_structure(summary, labels)
         if not summary_structure_ok:
             raise RuntimeError("Kimi briefing missing required sections: " + ", ".join(summary_missing_sections))
@@ -1936,7 +1904,25 @@ def generate_briefing(args):
     # Message 2: Portfolio (if available)
     portfolio_output = ""
     if portfolio_data:
-        portfolio_output = build_portfolio_message(portfolio_data, labels, language, deadline=deadline)
+        benchmark_config = load_benchmark_config()
+        try:
+            benchmark_quotes = fetch_portfolio_benchmark_quotes(
+                portfolio_data,
+                benchmark_config,
+                deadline=portfolio_deadline,
+                subprocess_timeout=subprocess_timeout,
+            )
+        except Exception as exc:
+            print(f"⚠️ Skipping portfolio benchmark quotes: {exc}", file=sys.stderr)
+            benchmark_quotes = {}
+        portfolio_output = build_portfolio_message(
+            portfolio_data,
+            labels,
+            language,
+            deadline=deadline,
+            benchmark_quotes=benchmark_quotes,
+            benchmark_config=benchmark_config,
+        )
         
     write_debug_once()
 

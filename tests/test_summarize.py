@@ -16,12 +16,12 @@ from summarize import (
     build_portfolio_message,
     build_watchpoints_data,
     classify_move_type,
-    validate_briefing_structure,
     detect_sector_clusters,
     format_symbol_display,
     format_watchpoints,
     get_index_change,
     match_headline_to_symbol,
+    validate_briefing_structure,
 )
 
 
@@ -45,189 +45,87 @@ class _FakeUrlopenResponse:
         return False
 
 
-def test_translate_via_gemini_api_parses_markdown_json(monkeypatch):
-    payload = {
-        "candidates": [
-            {
-                "content": {
-                    "parts": [
-                        {"text": "```json\n[\"Titel A\", \"Titel B\"]\n```"}
-                    ]
-                }
-            }
-        ]
-    }
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+def test_translate_via_ollama_kimi_parses_markdown_json(monkeypatch):
     monkeypatch.setattr(
-        summarize.urllib.request,
-        "urlopen",
-        lambda req, timeout=0: _FakeUrlopenResponse(payload),
+        summarize,
+        "run_ollama_kimi_prompt",
+        lambda *_a, **_k: "```json\n[\"Titel A\", \"Titel B\"]\n```",
     )
 
-    translated, success = summarize.translate_via_gemini_api(["Title A", "Title B"], deadline=None)
+    translated, success = summarize.translate_via_ollama_kimi(["Title A", "Title B"], deadline=None)
     assert success is True
     assert translated == ["Titel A", "Titel B"]
 
 
-def test_translate_headlines_uses_gemini_api_first(monkeypatch):
+def test_translate_headlines_uses_ollama_kimi_first(monkeypatch):
     monkeypatch.setattr(
         summarize,
-        "translate_via_gemini_api",
+        "translate_via_ollama_kimi",
         lambda titles, deadline: (["Titel"], True),
     )
 
     def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("run_agent_prompt should not be called when Gemini API succeeds")
+        raise AssertionError("Gemini fallback should not be called when Kimi succeeds")
 
-    monkeypatch.setattr(summarize, "run_agent_prompt", fail_if_called)
+    monkeypatch.setattr(summarize, "translate_via_gemini_cli", fail_if_called)
 
     translated, success = summarize.translate_headlines(["Title"], deadline=None)
     assert success is True
     assert translated == ["Titel"]
 
 
-def test_translate_headlines_falls_back_to_openclaw(monkeypatch):
+def test_translate_headlines_falls_back_to_gemini(monkeypatch):
     monkeypatch.setattr(
         summarize,
-        "translate_via_gemini_api",
+        "translate_via_ollama_kimi",
         lambda titles, deadline: (titles, False),
     )
-    monkeypatch.setattr(summarize, "run_agent_prompt", lambda *_a, **_k: "[\"Titel\"]")
+    monkeypatch.setattr(summarize, "translate_via_gemini_cli", lambda titles, deadline: (["Titel"], True))
 
     translated, success = summarize.translate_headlines(["Title"], deadline=None)
     assert success is True
     assert translated == ["Titel"]
 
 
-def test_translate_via_gemini_api_missing_key(monkeypatch):
-    """Returns original titles when GEMINI_API_KEY is not set."""
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    translated, success = summarize.translate_via_gemini_api(["Title A"], deadline=None)
-    assert success is False
-    assert translated == ["Title A"]
-
-
-def test_translate_via_gemini_api_empty_key(monkeypatch):
-    """Returns original titles when GEMINI_API_KEY is empty/whitespace."""
-    monkeypatch.setenv("GEMINI_API_KEY", "  ")
-    translated, success = summarize.translate_via_gemini_api(["Title A"], deadline=None)
-    assert success is False
-    assert translated == ["Title A"]
-
-
-def test_translate_via_gemini_api_http_error(monkeypatch):
-    """Falls back on non-retryable HTTP errors (e.g. 400)."""
-    from urllib.error import HTTPError
-    import io
-
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(summarize, "_GEMINI_MAX_RETRIES", 0)
-
-    def raise_400(req, timeout=0):
-        raise HTTPError("https://example.com", 400, "Bad Request", {}, io.BytesIO(b""))
-
-    monkeypatch.setattr(summarize.urllib.request, "urlopen", raise_400)
-    translated, success = summarize.translate_via_gemini_api(["Title"], deadline=None)
-    assert success is False
-    assert translated == ["Title"]
-
-
-def test_translate_via_gemini_api_timeout(monkeypatch):
+def test_translate_via_ollama_kimi_timeout(monkeypatch):
     """Falls back on timeout."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(summarize, "_GEMINI_MAX_RETRIES", 0)
+    monkeypatch.setattr(summarize, "run_ollama_kimi_prompt", lambda *_a, **_k: "⚠️ Kimi briefing error: timeout")
 
-    def raise_timeout(req, timeout=0):
-        raise TimeoutError("Connection timed out")
-
-    monkeypatch.setattr(summarize.urllib.request, "urlopen", raise_timeout)
-    translated, success = summarize.translate_via_gemini_api(["Title"], deadline=None)
+    translated, success = summarize.translate_via_ollama_kimi(["Title"], deadline=None)
     assert success is False
     assert translated == ["Title"]
 
 
-def test_translate_via_gemini_api_malformed_json(monkeypatch):
-    """Falls back when API returns non-JSON."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+def test_translate_via_ollama_kimi_malformed_json(monkeypatch):
+    """Falls back when provider returns non-JSON."""
+    monkeypatch.setattr(summarize, "run_ollama_kimi_prompt", lambda *_a, **_k: "not json at all")
 
-    class _BadResponse:
-        def read(self):
-            return b"not json at all"
-        def __enter__(self):
-            return self
-        def __exit__(self, *a):
-            return False
-
-    monkeypatch.setattr(summarize.urllib.request, "urlopen", lambda req, timeout=0: _BadResponse())
-    translated, success = summarize.translate_via_gemini_api(["Title"], deadline=None)
+    translated, success = summarize.translate_via_ollama_kimi(["Title"], deadline=None)
     assert success is False
     assert translated == ["Title"]
 
 
-def test_translate_via_gemini_api_empty_candidates(monkeypatch):
-    """Falls back when API returns empty candidates array."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    payload = {"candidates": []}
-    monkeypatch.setattr(
-        summarize.urllib.request, "urlopen",
-        lambda req, timeout=0: _FakeUrlopenResponse(payload),
-    )
-    translated, success = summarize.translate_via_gemini_api(["Title"], deadline=None)
-    assert success is False
-    assert translated == ["Title"]
-
-
-def test_translate_via_gemini_api_length_mismatch(monkeypatch):
+def test_translate_via_ollama_kimi_length_mismatch(monkeypatch):
     """Falls back when API returns wrong number of translations."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    payload = {
-        "candidates": [{
-            "content": {"parts": [{"text": '["Only One"]'}]}
-        }]
-    }
-    monkeypatch.setattr(
-        summarize.urllib.request, "urlopen",
-        lambda req, timeout=0: _FakeUrlopenResponse(payload),
-    )
-    translated, success = summarize.translate_via_gemini_api(
+    monkeypatch.setattr(summarize, "run_ollama_kimi_prompt", lambda *_a, **_k: '["Only One"]')
+
+    translated, success = summarize.translate_via_ollama_kimi(
         ["Title A", "Title B", "Title C"], deadline=None,
     )
     assert success is False
     assert translated == ["Title A", "Title B", "Title C"]
 
 
-def test_translate_via_gemini_api_retries_on_429(monkeypatch):
-    """Retries on 429 then succeeds."""
-    from urllib.error import HTTPError
-    import io
-
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(summarize, "_GEMINI_MAX_RETRIES", 1)
-    monkeypatch.setattr(summarize.time, "sleep", lambda s: None)  # skip wait
-
-    call_count = [0]
-    success_payload = {
-        "candidates": [{
-            "content": {"parts": [{"text": '["Titel"]'}]}
-        }]
-    }
-
-    def mock_urlopen(req, timeout=0):
-        call_count[0] += 1
-        if call_count[0] == 1:
-            raise HTTPError("https://example.com", 429, "Rate Limited", {}, io.BytesIO(b""))
-        return _FakeUrlopenResponse(success_payload)
-
-    monkeypatch.setattr(summarize.urllib.request, "urlopen", mock_urlopen)
-    translated, success = summarize.translate_via_gemini_api(["Title"], deadline=None)
+def test_translate_via_gemini_cli_success(monkeypatch):
+    monkeypatch.setattr(summarize, "run_gemini_prompt", lambda *_a, **_k: '["Titel"]')
+    translated, success = summarize.translate_via_gemini_cli(["Title"], deadline=None)
     assert success is True
     assert translated == ["Titel"]
-    assert call_count[0] == 2
 
 
-def test_translate_via_gemini_api_empty_list():
+def test_translate_via_ollama_kimi_empty_list():
     """Returns empty list for empty input."""
-    translated, success = summarize.translate_via_gemini_api([], deadline=None)
+    translated, success = summarize.translate_via_ollama_kimi([], deadline=None)
     assert success is True
     assert translated == []
 
@@ -287,15 +185,19 @@ def test_format_symbol_display_international_ticker():
     assert display == "Novo Nordisk (NOVO-B.CO)"
 
 
-def test_build_portfolio_message_adds_links_and_translation(monkeypatch):
+def test_build_portfolio_message_renders_attribution_without_source_dump():
     portfolio_data = {
         "meta": {"total_stocks": 2},
         "stocks": {
             "NOVO-B.CO": {
-                "quote": {"price": 100.0, "change_percent": -2.5},
-                "info": {},
+                "quote": {"price": 100.0, "change_percent": -2.5, "currency": "DKK"},
+                "info": {"name": "Novo Nordisk", "category": "Healthcare"},
                 "articles": [
-                    {"title": "Novo Nordisk falls on trial update", "link": "https://example.com/novo"}
+                    {
+                        "title": "Why Novo Nordisk Stock Is Moving Today",
+                        "link": "https://finance.yahoo.com/news/novo-stock-moving-today",
+                        "source": "Yahoo Finance",
+                    }
                 ],
             }
         },
@@ -303,18 +205,71 @@ def test_build_portfolio_message_adds_links_and_translation(monkeypatch):
     labels = {
         "heading_portfolio_movers": "Portfolio-Bewegungen",
         "sources_header": "Quellen",
+        "portfolio_attr_benchmark": "Einordnung",
+        "portfolio_attr_residual": "Restbewegung",
+        "portfolio_attr_no_catalyst": "kein bestätigter Auslöser",
+        "portfolio_classification_map": {"sector_theme": "sektor-/themengetrieben"},
     }
-    monkeypatch.setattr(summarize, "load_portfolio_metadata", lambda: {"NOVO-B.CO": {"name": "Novo Nordisk"}})
-    monkeypatch.setattr(
-        summarize,
-        "translate_headlines",
-        lambda titles, deadline=None: (["Novo Nordisk fällt nach Studienupdate"], True),
+    benchmark_config = summarize.load_benchmark_config()
+
+    output = build_portfolio_message(
+        portfolio_data,
+        labels,
+        "de",
+        benchmark_quotes={"XLV": {"change_percent": -2.0}, "ACWI": {"change_percent": -0.3}},
+        benchmark_config=benchmark_config,
     )
 
-    output = build_portfolio_message(portfolio_data, labels, "de")
     assert "Novo Nordisk (NOVO-B.CO)" in output
-    assert "Novo Nordisk fällt nach Studienupdate [1]" in output
-    assert "## Quellen" in output
+    assert "Einordnung: sektor-/themengetrieben" in output
+    assert "Restbewegung -0.5%" in output
+    assert "kein bestätigter Auslöser" in output
+    assert "## Quellen" not in output
+    assert "finance.yahoo.com" not in output
+
+
+def test_build_portfolio_message_uses_non_usd_price_symbol():
+    portfolio_data = {
+        "stocks": {
+            "6861.T": {
+                "quote": {"price": 27830.0, "change_percent": -5.2},
+                "info": {"name": "Keyence", "category": "Industrials"},
+                "articles": [],
+            }
+        }
+    }
+
+    output = build_portfolio_message(
+        portfolio_data,
+        {"heading_portfolio_movers": "Portfolio-Bewegungen"},
+        "de",
+        benchmark_quotes={"EWJ": {"change_percent": -4.7}, "ACWI": {"change_percent": -0.4}},
+        benchmark_config=summarize.load_benchmark_config(),
+    )
+
+    assert "¥27830.00" in output
+    assert "$27830.00" not in output
+
+
+def test_fetch_portfolio_benchmark_quotes_deduplicates_fetch(monkeypatch):
+    portfolio_data = {
+        "stocks": {
+            "NVDA": {"info": {"category": "Technology"}},
+            "AMD": {"info": {"category": "Technology"}},
+        }
+    }
+    calls = []
+
+    def fake_fetch_market_data(symbols, **_kwargs):
+        calls.append(symbols)
+        return {symbol: {"change_percent": 1.0} for symbol in symbols}
+
+    monkeypatch.setattr(summarize, "fetch_market_data", fake_fetch_market_data)
+
+    quotes = summarize.fetch_portfolio_benchmark_quotes(portfolio_data, summarize.load_benchmark_config())
+
+    assert calls == [["SPY", "SOXX"]]
+    assert quotes["SOXX"]["change_percent"] == 1.0
 
 
 def test_build_briefing_summary_uses_name_for_international_mover(monkeypatch):
@@ -406,28 +361,17 @@ Beobachten.
 
 
 def test_summarize_with_kimi_uses_localized_briefing_headings(monkeypatch):
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return json.dumps({"content": [{"type": "text", "text": "### Märkte\n\nAlles ruhig."}]}).encode('utf-8')
-
     captured = {}
 
-    def fake_urlopen(req, timeout=None):
-        captured["url"] = req.full_url
-        captured["json"] = json.loads(req.data.decode("utf-8"))
-        return FakeResponse()
+    def fake_runner(prompt, deadline=None, timeout=60):
+        captured["prompt"] = prompt
+        captured["timeout"] = timeout
+        return "### Märkte\n\nAlles ruhig."
 
-    monkeypatch.setenv("KIMI_API_KEY", "test-key")
-    monkeypatch.setattr(summarize.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(summarize, "run_ollama_kimi_prompt", fake_runner)
 
     summary = summarize.summarize_with_kimi("Raw content", language="de", style="briefing", deadline=None)
-    prompt = captured["json"]["messages"][0]["content"]
+    prompt = captured["prompt"]
     assert "### Märkte" in prompt
     assert "### Sentiment" not in prompt
     assert summary.startswith("### Märkte")
@@ -436,37 +380,38 @@ def test_summarize_with_kimi_uses_localized_briefing_headings(monkeypatch):
 def test_summarize_with_kimi_success(monkeypatch):
     captured = {}
 
-    def fake_urlopen(req, timeout=0):
-        captured["url"] = req.full_url
+    def fake_runner(prompt, deadline=None, timeout=60):
+        captured["prompt"] = prompt
         captured["timeout"] = timeout
-        captured["headers"] = dict(req.header_items())
-        payload = {
-            "content": [
-                {"type": "text", "text": "## Market Briefing\n\nKimi summary body"}
-            ]
-        }
-        return _FakeUrlopenResponse(payload)
+        return "## Market Briefing\n\nKimi summary body"
 
-    monkeypatch.setenv("KIMI_API_KEY", "test-key")
-    monkeypatch.setenv("KIMI_API_BASE_URL", "https://api.kimi.com/coding/")
-    monkeypatch.setenv("FINANCE_NEWS_KIMI_MODEL", "k2p5")
-    monkeypatch.setattr(summarize.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(summarize, "run_ollama_kimi_prompt", fake_runner)
 
     summary = summarize.summarize_with_kimi("Raw content", language="en", style="briefing", deadline=None)
     assert "Kimi summary body" in summary
     assert "informational purposes only" in summary
-    assert captured["url"] == "https://api.kimi.com/coding/v1/messages"
-    assert captured["headers"]["X-api-key"] == "test-key"
-    assert captured["headers"]["Anthropic-version"] == "2023-06-01"
+    assert "Raw content" in captured["prompt"]
+    assert captured["timeout"] == 60
 
 
-def test_summarize_with_kimi_missing_key(monkeypatch):
-    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+def test_summarize_with_kimi_missing_ollama(monkeypatch):
+    monkeypatch.setattr(
+        summarize,
+        "run_ollama_kimi_prompt",
+        lambda *_a, **_k: "⚠️ Kimi briefing error: ollama CLI not found",
+    )
     summary = summarize.summarize_with_kimi("Raw content", language="en", style="briefing", deadline=None)
-    assert summary == "⚠️ Kimi briefing error: KIMI_API_KEY not set"
+    assert summary == "⚠️ Kimi briefing error: ollama CLI not found"
 
 
-def test_generate_briefing_deadline_uses_deterministic_fallback(capsys, monkeypatch):
+def test_summarize_with_gemini_success(monkeypatch):
+    monkeypatch.setattr(summarize, "run_gemini_prompt", lambda *_a, **_k: "## Analysis\n\nGemini body")
+    summary = summarize.summarize_with_gemini("Raw content", language="en", style="analysis", deadline=None)
+    assert "Gemini body" in summary
+    assert "informational purposes only" in summary
+
+
+def test_generate_briefing_zero_deadline_disables_timeout(capsys, monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [{"source": "CNBC", "title": "Headline one", "link": "https://example.com/1"}],
@@ -477,6 +422,17 @@ def test_generate_briefing_deadline_uses_deterministic_fallback(capsys, monkeypa
     monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
+    monkeypatch.setattr(
+        summarize,
+        "summarize_with_kimi",
+        lambda *_a, **_k: (
+            "### Märkte\nAlles ruhig.\n\n"
+            "### Stimmung\nNeutral.\n\n"
+            "### Top 5 Schlagzeilen\n1. Headline one\n\n"
+            "### Portfolio-Auswirkung\nKeine.\n\n"
+            "### Beobachtungspunkte\n- Watch one"
+        ),
+    )
 
     args = type(
         "Args",
@@ -497,11 +453,11 @@ def test_generate_briefing_deadline_uses_deterministic_fallback(capsys, monkeypa
 
     summarize.generate_briefing(args)
     payload = json.loads(capsys.readouterr().out)
-    assert payload["summary_mode"] == "deterministic"
-    assert payload["summary_model_used"] == "deterministic_deadline_fallback"
+    assert payload["summary_mode"] == "llm"
+    assert payload["summary_model_used"] == "kimi"
 
 
-def test_generate_briefing_hard_fails_when_kimi_key_missing(monkeypatch):
+def test_generate_briefing_falls_back_to_gemini_when_kimi_unavailable(capsys, monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [
@@ -523,7 +479,18 @@ def test_generate_briefing_hard_fails_when_kimi_key_missing(monkeypatch):
     monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
-    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+    monkeypatch.setattr(summarize, "summarize_with_kimi", lambda *_a, **_k: "⚠️ Kimi briefing error: ollama CLI not found")
+    monkeypatch.setattr(
+        summarize,
+        "summarize_with_gemini",
+        lambda *_a, **_k: (
+            "### Markets\nQuiet.\n\n"
+            "### Sentiment\nNeutral.\n\n"
+            "### Top 5 Headlines\n1. Headline one\n\n"
+            "### Portfolio Impact\nNone.\n\n"
+            "### Watchpoints\n- Watch one"
+        ),
+    )
 
     args = type(
         "Args",
@@ -542,12 +509,13 @@ def test_generate_briefing_hard_fails_when_kimi_key_missing(monkeypatch):
         },
     )()
 
-    import pytest
-    with pytest.raises(RuntimeError, match="KIMI_API_KEY not set"):
-        summarize.generate_briefing(args)
+    summarize.generate_briefing(args)
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["summary_model_used"] == "gemini"
+    assert "### Markets" in payload["summary"]
 
 
-def test_generate_analysis_uses_claude_when_kimi_unavailable(monkeypatch, capsys):
+def test_generate_analysis_falls_back_to_gemini_when_kimi_unavailable(monkeypatch, capsys):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [
@@ -567,7 +535,8 @@ def test_generate_analysis_uses_claude_when_kimi_unavailable(monkeypatch, capsys
     monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
-    monkeypatch.setattr(summarize, "summarize_with_kimi", lambda *_a, **_k: "⚠️ Kimi briefing error: KIMI_API_KEY not set")
+    monkeypatch.setattr(summarize, "summarize_with_kimi", lambda *_a, **_k: "⚠️ Kimi briefing error: ollama CLI not found")
+    monkeypatch.setattr(summarize, "summarize_with_gemini", lambda *_a, **_k: "## Analysis\n\nGemini analysis body")
 
     args = type(
         "Args",
@@ -586,11 +555,10 @@ def test_generate_analysis_uses_claude_when_kimi_unavailable(monkeypatch, capsys
         },
     )()
 
-    monkeypatch.setattr(summarize, "summarize_with_claude", lambda *_a, **_k: "## Analysis\n\nKimi analysis body")
     summarize.generate_briefing(args)
     payload = json.loads(capsys.readouterr().out)
-    assert payload["summary_mode"] == "llm"
-    assert "Kimi analysis body" in payload["summary"]
+    assert payload["summary_model_used"] == "gemini"
+    assert "Gemini analysis body" in payload["summary"]
 
 
 def test_generate_analysis_uses_kimi_even_without_llm_flag(capsys, monkeypatch):
@@ -984,7 +952,7 @@ def test_generate_briefing_defaults_to_kimi_path(capsys, monkeypatch):
     assert payload["summary_model_used"] == "kimi"
 
 
-def test_generate_analysis_hard_fails_without_non_kimi_fallback(monkeypatch):
+def test_generate_analysis_hard_fails_when_configured_fallbacks_fail(monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [{"source": "CNBC", "title": "Headline one", "link": "https://example.com/1"}],
@@ -995,7 +963,8 @@ def test_generate_analysis_hard_fails_without_non_kimi_fallback(monkeypatch):
     monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
-    monkeypatch.setattr(summarize, "summarize_with_kimi", lambda *_a, **_k: "⚠️ Kimi briefing error: KIMI_API_KEY not set")
+    monkeypatch.setenv("FINANCE_NEWS_SUMMARY_FALLBACKS", "kimi")
+    monkeypatch.setattr(summarize, "summarize_with_kimi", lambda *_a, **_k: "⚠️ Kimi briefing error: ollama CLI not found")
 
     args = type(
         "Args",
@@ -1015,5 +984,5 @@ def test_generate_analysis_hard_fails_without_non_kimi_fallback(monkeypatch):
     )()
 
     import pytest
-    with pytest.raises(RuntimeError, match="KIMI_API_KEY not set"):
+    with pytest.raises(RuntimeError, match="ollama CLI not found"):
         summarize.generate_briefing(args)
