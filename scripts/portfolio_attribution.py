@@ -293,7 +293,7 @@ def _currency_for_symbol(symbol: str, quote: dict) -> str:
         return raw_currency
     if symbol.endswith(".T"):
         return "JPY"
-    if symbol.endswith(".TO"):
+    if symbol.endswith((".TO", ".V")):
         return "CAD"
     if symbol.endswith(".SW"):
         return "CHF"

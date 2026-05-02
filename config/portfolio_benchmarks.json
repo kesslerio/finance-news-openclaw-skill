@@ -55,6 +55,8 @@
     "8058.T": {"ticker": "EWJ", "label": "Japan equities"}
   },
   "ticker_suffix_regions": {
+    ".A": "US",
+    ".B": "US",
     ".T": "Japan",
     ".TW": "Taiwan",
     ".DE": "Europe",
@@ -71,7 +73,8 @@
     ".PA": {"ticker": "EURUSD=X", "label": "EUR/USD"},
     ".AS": {"ticker": "EURUSD=X", "label": "EUR/USD"},
     ".SW": {"ticker": "CHF=X", "label": "USD/CHF"},
-    ".TO": {"ticker": "CAD=X", "label": "USD/CAD"}
+    ".TO": {"ticker": "CAD=X", "label": "USD/CAD"},
+    ".V": {"ticker": "CAD=X", "label": "USD/CAD"}
   },
   "source_quality": {
     "allowed_sources": [

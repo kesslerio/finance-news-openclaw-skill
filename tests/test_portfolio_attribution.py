@@ -49,6 +49,19 @@ def test_theme_mapping_wins_when_category_is_unknown():
     assert mapping.uncertain is False
 
 
+def test_us_class_share_ticker_uses_us_market_benchmark():
+    config = load_benchmark_config()
+
+    mapping = resolve_benchmark_mapping(
+        "BRK.B",
+        {"category": "Unknown", "name": "Berkshire Hathaway"},
+        config,
+    )
+
+    assert mapping.market_ticker == "SPY"
+    assert mapping.market_label == "S&P 500"
+
+
 def test_benchmark_tickers_for_portfolio_deduplicates_market_and_sector():
     config = load_benchmark_config()
     stocks = {
@@ -161,6 +174,24 @@ def test_unmapped_ticker_keeps_quantitative_attribution_with_uncertainty():
     assert result.classification == "unexplained"
     assert result.mapping_uncertain is True
     assert result.benchmark_ticker == "ACWI"
+
+
+def test_tsx_venture_ticker_uses_cad_currency_context():
+    config = load_benchmark_config()
+    stocks = {
+        "ABC.V": {
+            "quote": {"price": 4.2, "change_percent": 2.0},
+            "info": {"category": "Unknown", "name": "Example Venture"},
+            "articles": [],
+        }
+    }
+    benchmark_quotes = {"EWC": {"change_percent": 0.5}, "CAD=X": {"change_percent": 0.2}}
+
+    result = build_attributions(stocks, benchmark_quotes, config)[0]
+
+    assert result.currency == "CAD"
+    assert result.currency_ticker == "CAD=X"
+    assert result.market_ticker == "EWC"
 
 
 def test_attributions_rank_by_relevance_before_classification():
