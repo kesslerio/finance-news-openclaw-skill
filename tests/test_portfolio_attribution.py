@@ -158,6 +158,22 @@ def test_allowed_source_why_guidance_article_is_evidence():
     assert evidence.confidence == "HIGH"
 
 
+def test_allowed_german_catalyst_article_is_evidence():
+    config = load_benchmark_config()
+    articles = [
+        {
+            "title": "Siemens hebt Prognose an, Ausblick verbessert sich",
+            "link": "https://www.handelsblatt.com/unternehmen/industrie/siemens-prognose-2026-05-01/",
+            "source": "Handelsblatt",
+        }
+    ]
+
+    evidence = evidence_for_articles(articles, config)
+
+    assert evidence is not None
+    assert evidence.confidence == "HIGH"
+
+
 def test_unmapped_ticker_keeps_quantitative_attribution_with_uncertainty():
     config = load_benchmark_config()
     stocks = {

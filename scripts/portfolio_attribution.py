@@ -41,6 +41,15 @@ CATALYST_KEYWORDS = {
     "revenue",
     "sales",
     "supply",
+    "absatz",
+    "ausblick",
+    "ergebnis",
+    "ergebnisse",
+    "gewinn",
+    "marge",
+    "margen",
+    "prognose",
+    "umsatz",
 }
 
 GENERIC_ARTICLE_PATTERNS = (
