@@ -176,9 +176,21 @@ def get_openbb_binary() -> str:
 # Cache the binary path on module load
 try:
     OPENBB_BINARY = get_openbb_binary()
+    OPENBB_UNAVAILABLE_REASON = None
 except RuntimeError as e:
-    print(f"❌ {e}", file=sys.stderr)
     OPENBB_BINARY = None
+    OPENBB_UNAVAILABLE_REASON = str(e)
+
+OPENBB_FALLBACK_NOTIFIED = False
+
+
+def _warn_openbb_fallback_once() -> None:
+    """Emit a single fallback warning when openbb-quote is unavailable."""
+    global OPENBB_FALLBACK_NOTIFIED
+    if OPENBB_FALLBACK_NOTIFIED:
+        return
+    print("⚠️ openbb-quote not found, using yfinance fallback", file=sys.stderr)
+    OPENBB_FALLBACK_NOTIFIED = True
 
 
 def load_sources():
@@ -475,7 +487,7 @@ def fetch_market_data(
                     failed_symbols.append(futures[future])
     else:
         # No openbb available, all symbols go to yfinance fallback
-        print("⚠️ openbb-quote not found, using yfinance fallback", file=sys.stderr)
+        _warn_openbb_fallback_once()
         failed_symbols = list(symbols)
 
     # 2. Fallback to yfinance for any symbols that failed

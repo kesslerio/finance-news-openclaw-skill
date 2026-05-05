@@ -14,6 +14,8 @@ def ensure_venv() -> None:
         return
     venv_python = Path(__file__).resolve().parent.parent / "venv" / "bin" / "python3"
     if not venv_python.exists():
+        if os.environ.get("FINANCE_NEWS_SUPPRESS_VENV_WARNING") == "1" or Path("/.dockerenv").exists():
+            return
         print("⚠️ finance-news venv missing; run scripts from the repo venv to avoid dependency errors.", file=sys.stderr)
         return
     env = os.environ.copy()
