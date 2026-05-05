@@ -19,7 +19,7 @@ def test_load_benchmark_config_has_global_defaults():
 
     assert config["broad_markets"]["default"]["ticker"] == "ACWI"
     assert config["categories"]["Technology"]["ticker"] == "XLK"
-    assert "finance.yahoo.com" in config["source_quality"]["blocked_domains"]
+    assert "finance.yahoo.com" in config["source_quality"]["allowed_domains"]
 
 
 def test_ticker_override_wins_over_category_mapping():
@@ -156,6 +156,63 @@ def test_allowed_source_why_guidance_article_is_evidence():
 
     assert evidence is not None
     assert evidence.confidence == "HIGH"
+
+
+def test_allowed_yahoo_guidance_article_is_evidence():
+    config = load_benchmark_config()
+    articles = [
+        {
+            "title": "Nvidia cuts guidance as data center demand slows",
+            "link": "https://finance.yahoo.com/news/nvidia-cuts-guidance-demand-slows-120000000.html",
+            "source": "Yahoo Finance",
+            "published_at": 1777966800.0,
+        }
+    ]
+
+    evidence = evidence_for_articles(articles, config)
+
+    assert evidence is not None
+    assert evidence.source == "Yahoo Finance"
+
+
+def test_yahoo_value_template_headline_is_not_evidence():
+    config = load_benchmark_config()
+    articles = [
+        {
+            "title": "TKR or HOCPY: Which Is the Better Value Stock Right Now?",
+            "link": "https://finance.yahoo.com/markets/stocks/articles/tkr-hocpy-better-value-stock-154003828.html",
+            "source": "Yahoo Finance",
+            "published_at": 1777966800.0,
+        }
+    ]
+
+    evidence = evidence_for_articles(articles, config)
+
+    assert evidence is None
+
+
+def test_evidence_selection_ranks_candidates_not_first_match():
+    config = load_benchmark_config()
+    articles = [
+        {
+            "title": "Axon (AXON) Stock Outpacing Its Peers This Year?",
+            "link": "https://finance.yahoo.com/news/axon-stock-outpacing-peers-120000000.html",
+            "source": "Yahoo Finance",
+            "published_at": 1777966800.0,
+        },
+        {
+            "title": "Axon raises guidance as enterprise demand accelerates",
+            "link": "https://www.reuters.com/world/us/axon-raises-guidance-2026-05-01/",
+            "source": "Reuters",
+            "published_at": 1777970400.0,
+        },
+    ]
+
+    evidence = evidence_for_articles(articles, config)
+
+    assert evidence is not None
+    assert evidence.source == "Reuters"
+    assert "raises guidance" in evidence.title.lower()
 
 
 def test_allowed_german_catalyst_article_is_evidence():

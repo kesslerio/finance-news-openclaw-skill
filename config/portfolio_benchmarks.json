@@ -86,6 +86,7 @@
       "Bloomberg",
       "CNBC",
       "MarketWatch",
+      "Yahoo Finance",
       "Handelsblatt",
       "Tagesschau",
       "ZEIT"
@@ -97,18 +98,34 @@
       "bloomberg.com",
       "cnbc.com",
       "marketwatch.com",
+      "finance.yahoo.com",
       "handelsblatt.com",
       "tagesschau.de",
       "zeit.de"
     ],
     "blocked_domains": [
-      "finance.yahoo.com",
-      "yahoo.com",
       "fool.com",
       "benzinga.com",
       "zacks.com",
       "investorplace.com",
       "seekingalpha.com"
-    ]
+    ],
+    "quality_scoring": {
+      "minimum_score": 1.1,
+      "allowed_source_bonus": 0.5,
+      "catalyst_bonus": 1.2,
+      "recency_max_bonus": 0.4,
+      "recency_half_life_hours": 24,
+      "low_value_template_penalty": 1.5,
+      "low_value_template_patterns": [
+        "which is the better value stock",
+        "which stock is the better value option",
+        "which stock is better value",
+        "vs\\.",
+        "\\bvs\\b",
+        "outpacing .* peers",
+        "here'?s\\s+what\\s+you\\s+should\\s+know"
+      ]
+    }
   }
 }
