@@ -141,7 +141,8 @@ def get_openbb_binary() -> str:
     
     Checks (in order):
     1. OPENBB_QUOTE_BIN environment variable
-    2. PATH via shutil.which()
+    2. Repo-local scripts/openbb-quote wrapper
+    3. PATH via shutil.which()
     
     Returns:
         Path to openbb-quote binary
@@ -157,6 +158,10 @@ def get_openbb_binary() -> str:
         else:
             print(f"⚠️ OPENBB_QUOTE_BIN={env_path} is not a valid executable", file=sys.stderr)
     
+    local_wrapper = SCRIPT_DIR / "openbb-quote"
+    if local_wrapper.exists() and os.access(local_wrapper, os.X_OK):
+        return str(local_wrapper)
+
     # Check PATH
     binary = shutil.which('openbb-quote')
     if binary:

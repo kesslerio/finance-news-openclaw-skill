@@ -188,3 +188,13 @@ def test_fetch_market_data_openbb_missing_warns_once(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert captured.err.count("openbb-quote not found, using yfinance fallback") == 1
+
+
+def test_get_openbb_binary_prefers_repo_wrapper(monkeypatch):
+    from fetch_news import get_openbb_binary, SCRIPT_DIR
+
+    monkeypatch.delenv("OPENBB_QUOTE_BIN", raising=False)
+    monkeypatch.setattr("fetch_news.shutil.which", lambda _cmd: None)
+    wrapper = SCRIPT_DIR / "openbb-quote"
+    assert wrapper.exists()
+    assert get_openbb_binary() == str(wrapper)

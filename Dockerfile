@@ -9,6 +9,7 @@ RUN apt-get update && \
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir openbb openbb-yfinance
 
 # Copy application code
 COPY . .
@@ -18,6 +19,7 @@ ENV KIMI_API_BASE_URL=https://api.kimi.com/coding/
 ENV FINANCE_NEWS_KIMI_MODEL=k2p5
 ENV MINIMAX_CODING_PLAN_API_KEY=
 ENV FINANCE_NEWS_SUPPRESS_VENV_WARNING=1
+ENV OPENBB_QUOTE_BIN=/app/scripts/openbb-quote
 
 # Default command (override via docker run args)
 CMD ["python3", "scripts/briefing.py"]
