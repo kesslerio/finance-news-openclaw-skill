@@ -95,14 +95,15 @@ def generate_and_send(args):
         timeout = timeout + 5
     result = subprocess.run(
         cmd,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=None,
         text=True,
         stdin=subprocess.DEVNULL,
         timeout=timeout
     )
     
     if result.returncode != 0:
-        print(f"❌ Briefing generation failed: {result.stderr}", file=sys.stderr)
+        print("❌ Briefing generation failed", file=sys.stderr)
         sys.exit(1)
     
     try:

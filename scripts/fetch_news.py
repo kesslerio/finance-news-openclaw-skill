@@ -926,7 +926,22 @@ def get_portfolio_movers(
     except TimeoutError:
         return {'error': 'Deadline exceeded while fetching portfolio quotes', 'movers': []}
 
-    quotes = fetch_market_data(symbols, timeout=effective_timeout, deadline=deadline)
+    quotes = _fetch_via_yfinance(symbols, timeout=effective_timeout, deadline=deadline)
+    missing = [sym for sym in symbols if sym not in quotes]
+    if missing and (time_left(deadline) is None or time_left(deadline) > 0):
+        fallback_limit = max(
+            max_items * LARGE_PORTFOLIO_FALLBACK_MULTIPLIER,
+            LARGE_PORTFOLIO_FALLBACK_MIN_SYMBOLS,
+        )
+        fallback_symbols = missing[:fallback_limit]
+        fallback_timeout = min(subprocess_timeout, LARGE_PORTFOLIO_FALLBACK_TIMEOUT_CAP_SEC)
+        fallback_quotes = fetch_market_data(
+            fallback_symbols,
+            timeout=fallback_timeout,
+            deadline=deadline,
+            allow_price_fallback=True,
+        )
+        quotes.update(fallback_quotes)
 
     gainers = []
     losers = []
