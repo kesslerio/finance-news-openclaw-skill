@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import math
+import re
+import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -245,15 +249,78 @@ def _is_generic_article(title: str) -> bool:
     return any(pattern in normalized for pattern in GENERIC_ARTICLE_PATTERNS)
 
 
+def _article_timestamp(article: dict) -> float | None:
+    raw = article.get("published_at")
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if isinstance(raw, str):
+        value = raw.strip()
+        if not value:
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            pass
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+    return None
+
+
+def _compile_patterns(raw_patterns: list[object]) -> list[re.Pattern[str]]:
+    compiled: list[re.Pattern[str]] = []
+    for item in raw_patterns:
+        token = str(item).strip()
+        if not token:
+            continue
+        try:
+            compiled.append(re.compile(token, re.IGNORECASE))
+        except re.error:
+            continue
+    return compiled
+
+
+def _template_hit_count(title: str, patterns: list[re.Pattern[str]]) -> int:
+    return sum(1 for pattern in patterns if pattern.search(title))
+
+
+def _recency_bonus(
+    published_at: float | None,
+    *,
+    max_bonus: float,
+    half_life_hours: float,
+) -> float:
+    if published_at is None:
+        return 0.0
+    age_hours = max(0.0, (time.time() - published_at) / 3600.0)
+    if half_life_hours <= 0:
+        return 0.0
+    decay = math.exp(-math.log(2.0) * (age_hours / half_life_hours))
+    return max_bonus * decay
+
+
 def evidence_for_articles(articles: list[dict], config: dict) -> Evidence | None:
     quality = config.get("source_quality", {})
     blocked_domains = [str(item).lower() for item in quality.get("blocked_domains", [])]
     allowed_domains = [str(item).lower() for item in quality.get("allowed_domains", [])]
     allowed_sources = [str(item).lower() for item in quality.get("allowed_sources", [])]
+    scoring = quality.get("quality_scoring", {})
+    min_score = float(scoring.get("minimum_score", 1.0))
+    allowed_source_bonus = float(scoring.get("allowed_source_bonus", 0.5))
+    catalyst_bonus = float(scoring.get("catalyst_bonus", 1.0))
+    recency_max_bonus = float(scoring.get("recency_max_bonus", 0.4))
+    recency_half_life_hours = float(scoring.get("recency_half_life_hours", 24.0))
+    low_value_template_penalty = float(scoring.get("low_value_template_penalty", 1.5))
+    low_value_patterns = _compile_patterns(scoring.get("low_value_template_patterns", []))
+    candidates: list[tuple[float, float, int, Evidence]] = []
 
-    for article in articles:
+    for index, article in enumerate(articles):
         title = str(article.get("title") or "").strip()
-        if not title or _is_generic_article(title) or not _has_catalyst(title):
+        if not title or _is_generic_article(title):
+            continue
+        has_catalyst = _has_catalyst(title)
+        if not has_catalyst:
             continue
         link = str(article.get("link") or "").strip()
         domain = _domain(link)
@@ -262,9 +329,34 @@ def evidence_for_articles(articles: list[dict], config: dict) -> Evidence | None
         source = str(article.get("source") or domain or "Source").strip()
         source_l = source.lower()
         allowed = source_l in allowed_sources or (domain and _domain_matches(domain, allowed_domains))
-        if allowed:
-            return Evidence(title=title, source=source, link=link, confidence="HIGH")
-    return None
+        if not allowed:
+            continue
+        published_at = _article_timestamp(article)
+        score = 0.0
+        score += allowed_source_bonus
+        if has_catalyst:
+            score += catalyst_bonus
+        score += _recency_bonus(
+            published_at,
+            max_bonus=recency_max_bonus,
+            half_life_hours=recency_half_life_hours,
+        )
+        score -= _template_hit_count(title, low_value_patterns) * low_value_template_penalty
+        if score < min_score:
+            continue
+        candidates.append(
+            (
+                score,
+                published_at or 0.0,
+                index,
+                Evidence(title=title, source=source, link=link, confidence="HIGH"),
+            )
+        )
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    return candidates[0][3]
 
 
 def _classification(

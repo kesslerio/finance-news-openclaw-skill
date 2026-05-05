@@ -26,6 +26,8 @@ docker run --rm -v "$PWD/config:/app/config:ro" \
   --time morning --lang de --json --fast
 ```
 
+If you change ranking, attribution, or source-quality logic, rebuild the image before smoke tests so cron-style runs do not use stale code.
+
 ### Lobster Workflow
 
 ```bash
