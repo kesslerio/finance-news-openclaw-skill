@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import json
 import pytest
 from unittest.mock import Mock, patch, MagicMock
-from fetch_news import fetch_market_data, fetch_rss, _get_best_feed_url, get_large_portfolio_news
+from fetch_news import fetch_market_data, fetch_rss, _get_best_feed_url, get_large_portfolio_news, get_portfolio_movers
 from utils import clamp_timeout, compute_deadline
 
 
@@ -173,6 +173,33 @@ def test_get_large_portfolio_news_respects_top_movers_count(monkeypatch):
 
     assert result["meta"]["top_movers_count"] == 2
     assert len(result["stocks"]) == 2
+
+
+def test_get_portfolio_movers_uses_batch_quotes_before_limited_fallback(monkeypatch):
+    symbols = [f"SYM{i}" for i in range(30)]
+    monkeypatch.setattr("fetch_news.get_portfolio_symbols", lambda: symbols)
+    monkeypatch.setattr(
+        "fetch_news._fetch_via_yfinance",
+        lambda *_a, **_k: {
+            "SYM0": {"change_percent": 3.0, "price": 103.0, "prev_close": 100.0},
+            "SYM1": {"change_percent": -2.0, "price": 98.0, "prev_close": 100.0},
+        },
+    )
+    fallback_calls = []
+
+    def fake_fetch_market_data(fallback_symbols, **_kwargs):
+        fallback_calls.append(list(fallback_symbols))
+        return {
+            "SYM2": {"change_percent": 1.5, "price": 101.5, "prev_close": 100.0},
+            "SYM3": {"change_percent": -1.2, "price": 98.8, "prev_close": 100.0},
+        }
+
+    monkeypatch.setattr("fetch_news.fetch_market_data", fake_fetch_market_data)
+
+    result = get_portfolio_movers(max_items=4, min_abs_change=1.0, subprocess_timeout=30)
+
+    assert fallback_calls == [symbols[2:22]]
+    assert [item["symbol"] for item in result["movers"]] == ["SYM0", "SYM2", "SYM1", "SYM3"]
 
 
 def test_fetch_market_data_openbb_missing_warns_once(monkeypatch, capsys):

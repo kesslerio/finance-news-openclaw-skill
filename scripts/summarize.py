@@ -16,6 +16,7 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 
+import urllib.error
 import urllib.parse
 import urllib.request
 from utils import clamp_timeout, compute_deadline, ensure_venv, time_left
@@ -41,6 +42,8 @@ MAX_HEADLINES_IN_PROMPT = 10
 TOP_HEADLINES_COUNT = 5
 DEFAULT_LLM_FALLBACK = ["kimi", "gemini"]
 DEFAULT_OLLAMA_KIMI_MODEL = "kimi-k2.6:cloud"
+DEFAULT_KIMI_API_BASE_URL = "https://api.kimi.com/coding/"
+DEFAULT_KIMI_API_MODEL = "k2p5"
 HEADLINE_SHORTLIST_SIZE = 20
 HEADLINE_MERGE_THRESHOLD = 0.82
 HEADLINE_MAX_AGE_HOURS = 72
@@ -152,6 +155,14 @@ def get_ollama_kimi_model() -> str:
     ).strip()
 
 
+def get_kimi_api_model() -> str:
+    return (
+        os.getenv("FINANCE_NEWS_KIMI_MODEL")
+        or os.getenv("KIMI_MODEL")
+        or DEFAULT_KIMI_API_MODEL
+    ).strip()
+
+
 def ticker_to_name(symbol: str, portfolio_meta: dict | None = None) -> str:
     if not symbol:
         return ""
@@ -202,6 +213,77 @@ def format_price_for_currency(price: float | None, currency: str) -> str:
     symbols = {"USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥", "CHF": "CHF ", "CAD": "C$", "TWD": "NT$"}
     prefix = symbols.get(currency, f"{currency} ")
     return f"{prefix}{price:.2f}"
+
+
+def format_whatsapp_message(message: str) -> str:
+    """Convert common Markdown output into WhatsApp-compatible formatting."""
+    lines = []
+    for line in message.splitlines():
+        heading = re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*$", line)
+        if heading:
+            lines.append(f"*{heading.group(1).strip()}*")
+        else:
+            lines.append(line)
+
+    text = "\n".join(lines)
+    text = re.sub(r"\*\*([^*\n][^*\n]*?)\*\*", r"*\1*", text)
+    return text
+
+
+def _quote_change_percent(quote: dict) -> float | None:
+    change = quote.get("change_percent")
+    if isinstance(change, (int, float)):
+        return float(change)
+
+    price = quote.get("price")
+    prev_close = quote.get("prev_close")
+    open_price = quote.get("open")
+    if isinstance(price, (int, float)) and isinstance(prev_close, (int, float)) and prev_close:
+        return ((price - prev_close) / prev_close) * 100
+    if isinstance(price, (int, float)) and isinstance(open_price, (int, float)) and open_price:
+        return ((price - open_price) / open_price) * 100
+    return None
+
+
+def extract_portfolio_movers(
+    portfolio_data: dict | None,
+    max_items: int = PORTFOLIO_MOVER_MAX,
+    min_abs_change: float = PORTFOLIO_MOVER_MIN_ABS_CHANGE,
+) -> list[dict]:
+    stocks = portfolio_data.get("stocks", {}) if isinstance(portfolio_data, dict) else {}
+    if not isinstance(stocks, dict):
+        return []
+
+    gainers = []
+    losers = []
+    for symbol, stock_data in stocks.items():
+        if not isinstance(stock_data, dict):
+            continue
+        quote = stock_data.get("quote", {})
+        if not isinstance(quote, dict):
+            continue
+        change_pct = _quote_change_percent(quote)
+        price = quote.get("price")
+        if change_pct is None or not isinstance(price, (int, float)):
+            continue
+
+        item = {"symbol": symbol, "change_pct": change_pct, "price": price}
+        if change_pct >= min_abs_change:
+            gainers.append(item)
+        elif change_pct <= -min_abs_change:
+            losers.append(item)
+
+    gainers.sort(key=lambda x: x["change_pct"], reverse=True)
+    losers.sort(key=lambda x: x["change_pct"])
+
+    max_each = max_items // 2
+    selected = gainers[:max_each] + losers[:max_each]
+    if len(selected) < max_items:
+        remaining = max_items - len(selected)
+        extra = gainers[max_each:] + losers[max_each:]
+        extra.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
+        selected.extend(extra[:remaining])
+    return selected[:max_items]
 
 LANG_PROMPTS = {
     "de": "Output must be in German only.",
@@ -436,15 +518,55 @@ def _run_prompt_command(
     return f"⚠️ {error_label}: {stderr}"
 
 
-def run_ollama_kimi_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
-    model = get_ollama_kimi_model()
-    return _run_prompt_command(
-        ["ollama", "run", model],
-        prompt,
-        deadline,
-        timeout,
-        "Kimi briefing error",
+def _kimi_messages_endpoint() -> str:
+    base_url = (os.getenv("KIMI_API_BASE_URL") or DEFAULT_KIMI_API_BASE_URL).strip()
+    return base_url.rstrip("/") + "/v1/messages"
+
+
+def _run_kimi_api_prompt(prompt: str, deadline: float | None, timeout: int) -> str:
+    api_key = (os.getenv("KIMI_API_KEY") or os.getenv("KIMI_API_KEY_WORK") or "").strip()
+    if not api_key:
+        return "⚠️ Kimi briefing error: KIMI_API_KEY or KIMI_API_KEY_WORK not set"
+
+    payload = {
+        "model": get_kimi_api_model(),
+        "max_tokens": int(os.getenv("FINANCE_NEWS_KIMI_MAX_TOKENS", "1200")),
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        _kimi_messages_endpoint(),
+        data=body,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
     )
+
+    try:
+        request_timeout = clamp_timeout(timeout, deadline)
+        with urllib.request.urlopen(req, timeout=request_timeout) as response:
+            response_body = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace").strip()
+        detail = error_body[:300] if error_body else exc.reason
+        return f"⚠️ Kimi briefing error: HTTP {exc.code}: {detail}"
+    except TimeoutError:
+        return "⚠️ Kimi briefing error: deadline exceeded"
+    except (urllib.error.URLError, OSError) as exc:
+        return f"⚠️ Kimi briefing error: {exc}"
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        return f"⚠️ Kimi briefing error: invalid JSON response: {exc}"
+
+    reply_text = _extract_anthropic_text(response_body)
+    if not reply_text:
+        return "⚠️ Kimi briefing error: empty API response"
+    return reply_text
+
+
+def run_ollama_kimi_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
+    return _run_kimi_api_prompt(prompt, deadline, timeout)
 
 
 def run_gemini_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
@@ -1210,8 +1332,12 @@ def format_market_data(market_data: dict) -> str:
         for symbol, idx in data.get('indices', {}).items():
             if 'data' in idx and idx['data']:
                 price = idx['data'].get('price', 'N/A')
-                change_pct = idx['data'].get('change_percent', 0)
-                lines.append(f"- {idx['name']}: {price} ({change_pct:+.2f}%)")
+                change_pct = idx['data'].get('change_percent')
+                try:
+                    change_text = f"{float(change_pct):+.2f}%"
+                except (TypeError, ValueError):
+                    change_text = "N/A"
+                lines.append(f"- {idx['name']}: {price} ({change_text})")
         lines.append("")
     
     return '\n'.join(lines)
@@ -1742,15 +1868,16 @@ def generate_briefing(args):
     if language == "de" and portfolio_data:
         translate_portfolio_article_items(portfolio_data, deadline=portfolio_deadline)
 
-    movers = []
+    movers = extract_portfolio_movers(portfolio_data)
     try:
-        movers_result = get_portfolio_movers(
-            max_items=PORTFOLIO_MOVER_MAX,
-            min_abs_change=PORTFOLIO_MOVER_MIN_ABS_CHANGE,
-            deadline=portfolio_deadline,
-            subprocess_timeout=subprocess_timeout,
-        )
-        movers = movers_result.get("movers", [])
+        if not movers:
+            movers_result = get_portfolio_movers(
+                max_items=PORTFOLIO_MOVER_MAX,
+                min_abs_change=PORTFOLIO_MOVER_MIN_ABS_CHANGE,
+                deadline=portfolio_deadline,
+                subprocess_timeout=subprocess_timeout,
+            )
+            movers = movers_result.get("movers", [])
     except Exception as exc:
         print(f"⚠️ Skipping portfolio movers: {exc}", file=sys.stderr)
         movers = []
@@ -1942,6 +2069,7 @@ def generate_briefing(args):
     sources_section = format_sources(top_headlines, labels)
     if sources_section:
         macro_output = f"{macro_output}\n{sources_section}\n"
+    macro_output = format_whatsapp_message(macro_output)
 
     # Message 2: Portfolio (if available)
     portfolio_output = ""
@@ -1965,6 +2093,7 @@ def generate_briefing(args):
             benchmark_quotes=benchmark_quotes,
             benchmark_config=benchmark_config,
         )
+        portfolio_output = format_whatsapp_message(portfolio_output)
         
     write_debug_once()
 

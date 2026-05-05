@@ -17,6 +17,8 @@ from summarize import (
     build_watchpoints_data,
     classify_move_type,
     detect_sector_clusters,
+    extract_portfolio_movers,
+    format_market_data,
     format_symbol_display,
     format_watchpoints,
     get_index_change,
@@ -43,6 +45,104 @@ class _FakeUrlopenResponse:
 
     def __exit__(self, exc_type, exc, tb):
         return False
+
+
+def test_format_market_data_handles_non_numeric_change_percent():
+    market_data = {
+        "markets": {
+            "us": {
+                "name": "US",
+                "indices": {
+                    "^GSPC": {
+                        "name": "S&P 500",
+                        "data": {"price": 7136, "change_percent": "N/A"},
+                    },
+                    "^IXIC": {
+                        "name": "Nasdaq",
+                        "data": {"price": 22450, "change_percent": None},
+                    },
+                },
+            }
+        }
+    }
+
+    result = format_market_data(market_data)
+
+    assert "- S&P 500: 7136 (N/A)" in result
+    assert "- Nasdaq: 22450 (N/A)" in result
+
+
+def test_run_ollama_kimi_prompt_calls_kimi_api(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(req, timeout):
+        captured["url"] = req.full_url
+        captured["timeout"] = timeout
+        captured["headers"] = dict(req.header_items())
+        captured["payload"] = json.loads(req.data.decode("utf-8"))
+        return _FakeUrlopenResponse({"content": [{"type": "text", "text": "Kimi response"}]})
+
+    monkeypatch.setenv("KIMI_API_KEY", "test-key")
+    monkeypatch.setenv("KIMI_API_BASE_URL", "https://api.kimi.test/coding/")
+    monkeypatch.setenv("FINANCE_NEWS_KIMI_MODEL", "k2p5-test")
+    monkeypatch.setattr(summarize.urllib.request, "urlopen", fake_urlopen)
+
+    result = summarize.run_ollama_kimi_prompt("Write a briefing", deadline=None, timeout=45)
+
+    assert result == "Kimi response"
+    assert captured["url"] == "https://api.kimi.test/coding/v1/messages"
+    assert captured["timeout"] == 45
+    assert captured["headers"]["Authorization"] == "Bearer test-key"
+    assert captured["payload"]["model"] == "k2p5-test"
+    assert captured["payload"]["messages"] == [{"role": "user", "content": "Write a briefing"}]
+
+
+def test_run_ollama_kimi_prompt_requires_kimi_key(monkeypatch):
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+    monkeypatch.delenv("KIMI_API_KEY_WORK", raising=False)
+
+    result = summarize.run_ollama_kimi_prompt("Write a briefing", deadline=None, timeout=45)
+
+    assert result == "⚠️ Kimi briefing error: KIMI_API_KEY or KIMI_API_KEY_WORK not set"
+
+
+def test_extract_portfolio_movers_reuses_existing_quotes():
+    portfolio_data = {
+        "stocks": {
+            "AAA": {"quote": {"price": 105.0, "prev_close": 100.0}},
+            "BBB": {"quote": {"price": 96.0, "prev_close": 100.0}},
+            "CCC": {"quote": {"price": 101.5, "change_percent": 1.5}},
+            "DDD": {"quote": {"price": 100.2, "prev_close": 100.0}},
+        }
+    }
+
+    movers = extract_portfolio_movers(portfolio_data, max_items=3, min_abs_change=1.0)
+
+    assert movers == [
+        {"symbol": "AAA", "change_pct": 5.0, "price": 105.0},
+        {"symbol": "BBB", "change_pct": -4.0, "price": 96.0},
+        {"symbol": "CCC", "change_pct": 1.5, "price": 101.5},
+    ]
+
+
+def test_format_whatsapp_message_replaces_markdown_headings_and_bold():
+    message = "\n".join([
+        "🌆 **Börsen Abend-Briefing**",
+        "### Märkte",
+        "Alles ruhig.",
+        "## Quellen",
+        "[1] https://example.com",
+    ])
+
+    formatted = summarize.format_whatsapp_message(message)
+
+    assert formatted.splitlines() == [
+        "🌆 *Börsen Abend-Briefing*",
+        "*Märkte*",
+        "Alles ruhig.",
+        "*Quellen*",
+        "[1] https://example.com",
+    ]
 
 
 def test_translate_via_ollama_kimi_parses_markdown_json(monkeypatch):
