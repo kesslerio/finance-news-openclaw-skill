@@ -251,6 +251,88 @@ def test_build_portfolio_message_uses_non_usd_price_symbol():
     assert "$27830.00" not in output
 
 
+def test_build_portfolio_message_localizes_benchmark_na_and_confidence():
+    labels = summarize.load_config()["translations"]["de"]
+    portfolio_data = {
+        "stocks": {
+            "8053.T": {
+                "quote": {"price": 6840.0, "change_percent": 17.1},
+                "info": {"name": "Sumitomo Corp"},
+                "articles": [
+                    {
+                        "title": "Sumitomo raises earnings outlook after demand improves",
+                        "link": "https://www.reuters.com/world/asia-pacific/sumitomo-raises-outlook-2026-05-05/",
+                        "source": "Reuters",
+                    }
+                ],
+            }
+        }
+    }
+
+    output = build_portfolio_message(
+        portfolio_data,
+        labels,
+        "de",
+        benchmark_quotes={},
+        benchmark_config=summarize.load_benchmark_config(),
+    )
+
+    assert "Japan-Aktien k. A." in output
+    assert "Konfidenz: HOCH" in output
+
+
+def test_build_portfolio_message_prefers_title_de_for_german_evidence():
+    labels = summarize.load_config()["translations"]["de"]
+    portfolio_data = {
+        "stocks": {
+            "6861.T": {
+                "quote": {"price": 76460.0, "change_percent": 7.2},
+                "info": {"name": "Keyence"},
+                "articles": [
+                    {
+                        "title": "Keyence raises guidance as factory automation demand rebounds",
+                        "title_de": "Keyence hebt den Ausblick an, da die Nachfrage nach Fabrikautomation anzieht",
+                        "link": "https://www.reuters.com/world/asia-pacific/keyence-raises-guidance-2026-05-05/",
+                        "source": "Reuters",
+                    }
+                ],
+            }
+        }
+    }
+
+    output = build_portfolio_message(
+        portfolio_data,
+        labels,
+        "de",
+        benchmark_quotes={},
+        benchmark_config=summarize.load_benchmark_config(),
+    )
+
+    assert "Keyence hebt den Ausblick an" in output
+    assert "Konfidenz: HOCH" in output
+
+
+def test_translate_portfolio_article_items_updates_nested_article_titles(monkeypatch):
+    payload = {
+        "stocks": {
+            "NVDA": {
+                "articles": [{"title": "NVIDIA beats estimates"}],
+            }
+        }
+    }
+
+    def fake_translate(items, deadline):
+        assert deadline == 10.0
+        items[0]["title_de"] = "NVIDIA übertrifft die Erwartungen"
+        return True
+
+    monkeypatch.setattr(summarize, "translate_headline_items", fake_translate)
+    ok = summarize.translate_portfolio_article_items(payload, deadline=10.0)
+
+    assert ok is True
+    assert payload["stocks"]["NVDA"]["articles"][0]["title_de"] == "NVIDIA übertrifft die Erwartungen"
+
+
 def test_fetch_portfolio_benchmark_quotes_deduplicates_fetch(monkeypatch):
     portfolio_data = {
         "stocks": {
