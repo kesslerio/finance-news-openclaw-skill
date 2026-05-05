@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/_openbb_common.sh"
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: openbb-quote SYMBOL [SYMBOL2 ...] [provider]" >&2
+    exit 1
+fi
+
+EXPLICIT_PROVIDER=""
+TICKERS=()
+for arg in "$@"; do
+    case "${arg}" in
+        fmp|intrinio|yfinance|tiingo|polygon|alphavantage)
+            EXPLICIT_PROVIDER="${arg}"
+            ;;
+        *)
+            TICKERS+=("${arg}")
+            ;;
+    esac
+done
+
+PROVIDER="$(resolve_openbb_provider "${EXPLICIT_PROVIDER}" "yfinance")"
+
+export _OPENBB_PROVIDER="${PROVIDER}"
+export _OPENBB_TICKERS
+_OPENBB_TICKERS="$(printf '%s\n' "${TICKERS[@]}")"
+
+raw_output="$(
+run_openbb_python << 'PYTHON'
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+from openbb import obb
+
+provider = os.environ.get("_OPENBB_PROVIDER", "yfinance")
+tickers = [t.strip().upper() for t in os.environ.get("_OPENBB_TICKERS", "").split("\n") if t.strip()]
+
+results = []
+for symbol in tickers:
+    try:
+        response = obb.equity.price.quote(symbol=symbol, provider=provider)
+        if not response.results:
+            results.append({"symbol": symbol, "error": "no quote"})
+            continue
+        item = response.results[0]
+        results.append(
+            {
+                "symbol": symbol,
+                "price": float(item.last_price) if item.last_price is not None else None,
+                "open": float(item.open) if getattr(item, "open", None) is not None else None,
+                "high": float(item.high) if getattr(item, "high", None) is not None else None,
+                "low": float(item.low) if getattr(item, "low", None) is not None else None,
+                "volume": int(item.volume) if getattr(item, "volume", None) is not None else None,
+                "prev_close": float(item.prev_close) if getattr(item, "prev_close", None) is not None else None,
+                "change": float(item.change) if getattr(item, "change", None) is not None else None,
+                "change_percent": float(item.change_percent) if getattr(item, "change_percent", None) is not None else None,
+            }
+        )
+    except Exception as exc:
+        results.append({"symbol": symbol, "error": str(exc)})
+
+print(json.dumps(results, ensure_ascii=False))
+sys.exit(0)
+PYTHON
+)"
+
+printf '%s' "${raw_output}" | python3 -c '
+from __future__ import annotations
+import json
+import sys
+
+text = sys.stdin.read()
+decoder = json.JSONDecoder()
+for idx, ch in enumerate(text):
+    if ch not in "[{":
+        continue
+    try:
+        obj, _ = decoder.raw_decode(text[idx:])
+    except Exception:
+        continue
+    if isinstance(obj, dict):
+        obj = [obj]
+    print(json.dumps(obj, ensure_ascii=False))
+    raise SystemExit(0)
+print("openbb-quote: unable to parse OpenBB JSON output", file=sys.stderr)
+raise SystemExit(1)
+'

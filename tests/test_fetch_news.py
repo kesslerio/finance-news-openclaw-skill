@@ -173,3 +173,28 @@ def test_get_large_portfolio_news_respects_top_movers_count(monkeypatch):
 
     assert result["meta"]["top_movers_count"] == 2
     assert len(result["stocks"]) == 2
+
+
+def test_fetch_market_data_openbb_missing_warns_once(monkeypatch, capsys):
+    monkeypatch.setattr("fetch_news.OPENBB_BINARY", None)
+    monkeypatch.setattr("fetch_news.OPENBB_FALLBACK_NOTIFIED", False)
+    monkeypatch.setattr(
+        "fetch_news._fetch_via_yfinance",
+        lambda symbols, *_args, **_kwargs: {symbol: {"symbol": symbol} for symbol in symbols},
+    )
+
+    fetch_market_data(["AAA"])
+    fetch_market_data(["BBB"])
+
+    captured = capsys.readouterr()
+    assert captured.err.count("openbb-quote not found, using yfinance fallback") == 1
+
+
+def test_get_openbb_binary_prefers_repo_wrapper(monkeypatch):
+    from fetch_news import get_openbb_binary, SCRIPT_DIR
+
+    monkeypatch.delenv("OPENBB_QUOTE_BIN", raising=False)
+    monkeypatch.setattr("fetch_news.shutil.which", lambda _cmd: None)
+    wrapper = SCRIPT_DIR / "openbb-quote"
+    assert wrapper.exists()
+    assert get_openbb_binary() == str(wrapper)

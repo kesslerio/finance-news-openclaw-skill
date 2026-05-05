@@ -83,6 +83,7 @@ class BenchmarkMapping:
 @dataclass(frozen=True)
 class Evidence:
     title: str
+    title_de: str | None
     source: str
     link: str
     confidence: str
@@ -349,7 +350,13 @@ def evidence_for_articles(articles: list[dict], config: dict) -> Evidence | None
                 score,
                 published_at or 0.0,
                 index,
-                Evidence(title=title, source=source, link=link, confidence="HIGH"),
+                Evidence(
+                    title=title,
+                    title_de=(str(article.get("title_de") or "").strip() or None),
+                    source=source,
+                    link=link,
+                    confidence="HIGH",
+                ),
             )
         )
 

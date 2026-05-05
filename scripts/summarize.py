@@ -1107,6 +1107,24 @@ def translate_headline_items(headlines: list[dict], deadline: float | None) -> b
     return True
 
 
+def translate_portfolio_article_items(portfolio_data: dict | None, deadline: float | None) -> bool:
+    if not isinstance(portfolio_data, dict):
+        return False
+    stocks = portfolio_data.get("stocks", {})
+    if not isinstance(stocks, dict):
+        return False
+    articles: list[dict] = []
+    for stock_data in stocks.values():
+        if not isinstance(stock_data, dict):
+            continue
+        for article in stock_data.get("articles", []):
+            if isinstance(article, dict):
+                articles.append(article)
+    if not articles:
+        return False
+    return translate_headline_items(articles, deadline)
+
+
 
 
 
@@ -1401,35 +1419,57 @@ def _classification_label(result: AttributionResult, labels: dict) -> str:
     return result.classification
 
 
-def _pct(value: float | None) -> str:
-    return "n/a" if value is None else f"{value:+.1f}%"
+def _pct(value: float | None, labels: dict) -> str:
+    na_label = str(labels.get("portfolio_attr_na", "n/a")).strip() or "n/a"
+    return na_label if value is None else f"{value:+.1f}%"
+
+
+def _localized_benchmark_label(label: str, labels: dict) -> str:
+    mapping = labels.get("portfolio_benchmark_label_map", {})
+    if isinstance(mapping, dict):
+        localized = mapping.get(label)
+        if isinstance(localized, str) and localized.strip():
+            return localized.strip()
+    return label
+
+
+def _localized_confidence(value: str, labels: dict) -> str:
+    mapping = labels.get("portfolio_attr_confidence_map", {})
+    if isinstance(mapping, dict):
+        localized = mapping.get(value)
+        if isinstance(localized, str) and localized.strip():
+            return localized.strip()
+    return value
 
 
 def _attribution_line(result: AttributionResult, labels: dict) -> str:
     heading = labels.get("portfolio_attr_benchmark", "Attribution")
     residual = labels.get("portfolio_attr_residual", "residual")
     label = _classification_label(result, labels)
+    benchmark_label = _localized_benchmark_label(result.benchmark_label, labels)
     parts = [
         f"{heading}: {label}",
-        f"{result.benchmark_label} {_pct(result.benchmark_change_pct)}",
+        f"{benchmark_label} {_pct(result.benchmark_change_pct, labels)}",
     ]
     if result.residual_pct is not None:
-        parts.append(f"{residual} {_pct(result.residual_pct)}")
+        parts.append(f"{residual} {_pct(result.residual_pct, labels)}")
     if result.currency_ticker and result.currency_change_pct is not None and abs(result.currency_change_pct) >= 1:
-        parts.append(f"{result.currency_ticker} {_pct(result.currency_change_pct)}")
+        parts.append(f"{result.currency_ticker} {_pct(result.currency_change_pct, labels)}")
     if result.mapping_uncertain:
         parts.append(labels.get("portfolio_attr_mapping_uncertain", "benchmark mapping uncertain"))
     return "• " + "; ".join(parts)
 
 
-def _evidence_line(result: AttributionResult, labels: dict) -> str:
+def _evidence_line(result: AttributionResult, labels: dict, language: str) -> str:
     if result.evidence is None:
         return f"• {labels.get('portfolio_attr_no_catalyst', 'No confirmed catalyst')}"
     confidence = labels.get("portfolio_attr_confidence", "confidence")
-    title = result.evidence.title
+    confidence_value = _localized_confidence(result.evidence.confidence, labels)
+    title = result.evidence.title_de if language == "de" else None
+    title = title or result.evidence.title
     if len(title) > 90:
         title = f"{title[:87]}..."
-    return f"• {title} ({result.evidence.source}, {confidence}: {result.evidence.confidence})"
+    return f"• {title} ({result.evidence.source}, {confidence}: {confidence_value})"
 
 
 def build_portfolio_message(
@@ -1464,7 +1504,7 @@ def build_portfolio_message(
         price_str = format_price_for_currency(result.price, result.currency)
         lines.append(f"\n**{result.display_symbol}** {emoji} {price_str} ({result.change_pct:+.2f}%)")
         lines.append(_attribution_line(result, labels))
-        lines.append(_evidence_line(result, labels))
+        lines.append(_evidence_line(result, labels, language))
 
     return "\n".join(lines)
 
@@ -1699,6 +1739,8 @@ def generate_briefing(args):
     except PortfolioError as exc:
         print(f"⚠️ Skipping portfolio: {exc}", file=sys.stderr)
         portfolio_data = None
+    if language == "de" and portfolio_data:
+        translate_portfolio_article_items(portfolio_data, deadline=portfolio_deadline)
 
     movers = []
     try:
