@@ -9,6 +9,7 @@ from portfolio_attribution import (
     benchmark_tickers_for_portfolio,
     build_attributions,
     evidence_for_articles,
+    evaluate_article_evidence,
     load_benchmark_config,
     resolve_benchmark_mapping,
 )
@@ -158,7 +159,7 @@ def test_allowed_source_why_guidance_article_is_evidence():
     assert evidence.confidence == "HIGH"
 
 
-def test_allowed_yahoo_guidance_article_is_evidence():
+def test_allowed_yahoo_guidance_article_is_context_not_high_confidence_evidence():
     config = load_benchmark_config()
     articles = [
         {
@@ -170,9 +171,13 @@ def test_allowed_yahoo_guidance_article_is_evidence():
     ]
 
     evidence = evidence_for_articles(articles, config)
+    audit = evaluate_article_evidence(articles, config)
 
-    assert evidence is not None
-    assert evidence.source == "Yahoo Finance"
+    assert evidence is None
+    assert audit.status == "no_high_confidence_evidence"
+    assert audit.candidates[0].status == "context"
+    assert audit.candidates[0].reason == "not_high_confidence_source"
+    assert audit.candidates[0].confidence == "MEDIUM"
 
 
 def test_yahoo_value_template_headline_is_not_evidence():
@@ -213,6 +218,48 @@ def test_evidence_selection_ranks_candidates_not_first_match():
     assert evidence is not None
     assert evidence.source == "Reuters"
     assert "raises guidance" in evidence.title.lower()
+
+
+def test_evidence_audit_records_rejected_candidates():
+    config = load_benchmark_config()
+    articles = [
+        {
+            "title": "Why Nvidia Stock Is Moving Lower Today",
+            "link": "https://finance.yahoo.com/news/why-nvidia-stock-moving-lower-120000000.html",
+            "source": "Yahoo Finance",
+        },
+        {
+            "title": "Nvidia raises guidance as data center demand improves",
+            "link": "https://www.reuters.com/technology/nvidia-guidance-2026-05-01/",
+            "source": "Reuters",
+        },
+    ]
+
+    audit = evaluate_article_evidence(articles, config)
+
+    assert audit.status == "selected"
+    assert audit.selected is not None
+    assert audit.selected.source == "Reuters"
+    assert [candidate.status for candidate in audit.candidates] == ["rejected", "selected"]
+    assert audit.candidates[0].reason == "generic_price_action"
+
+
+def test_peer_only_large_move_has_no_high_confidence_evidence_but_is_exception():
+    config = load_benchmark_config()
+    stocks = {
+        "SPGI": {
+            "quote": {"price": 403.95, "change_percent": -9.2},
+            "info": {"category": "Financials", "name": "S&P Global"},
+            "articles": [],
+        }
+    }
+
+    result = build_attributions(stocks, {"XLF": {"change_percent": -0.2}, "SPY": {"change_percent": 0.1}}, config)[0]
+
+    assert result.evidence is None
+    assert result.has_high_confidence_evidence is False
+    assert result.is_unresolved_exception is True
+    assert result.evidence_audit.status == "no_source_coverage"
 
 
 def test_allowed_german_catalyst_article_is_evidence():
