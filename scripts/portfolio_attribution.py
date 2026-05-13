@@ -24,11 +24,14 @@ CLASSIFICATION_ORDER = {
 
 CATALYST_KEYWORDS = {
     "acquisition",
+    "analyst",
     "antitrust",
     "buyback",
     "capex",
+    "capital markets day",
     "cuts guidance",
     "demand",
+    "downgrade",
     "earnings",
     "export controls",
     "forecast",
@@ -40,19 +43,36 @@ CATALYST_KEYWORDS = {
     "outlook",
     "pricing",
     "profit",
+    "q1",
+    "q2",
+    "q3",
+    "q4",
+    "rating",
     "recall",
     "regulator",
     "revenue",
     "sales",
     "supply",
+    "target cut",
+    "trading update",
+    "upgrade",
     "absatz",
+    "analyst",
     "ausblick",
+    "herabstufung",
     "ergebnis",
     "ergebnisse",
     "gewinn",
+    "hochgestuft",
     "marge",
     "margen",
     "prognose",
+    "q1",
+    "q2",
+    "q3",
+    "q4",
+    "quartal",
+    "trading update",
     "umsatz",
 }
 
@@ -64,8 +84,9 @@ GENERIC_ARTICLE_PATTERNS = (
     "best stocks",
     "buy now",
     "could be a millionaire",
-    "price target",
 )
+
+EXCEPTION_MOVE_THRESHOLD_PCT = 9.0
 
 
 @dataclass(frozen=True)
@@ -90,6 +111,25 @@ class Evidence:
 
 
 @dataclass(frozen=True)
+class EvidenceCandidateAudit:
+    title: str
+    source: str
+    link: str
+    status: str
+    reason: str
+    score: float | None = None
+    confidence: str | None = None
+
+
+@dataclass(frozen=True)
+class EvidenceAudit:
+    status: str
+    checked_count: int
+    selected: Evidence | None
+    candidates: tuple[EvidenceCandidateAudit, ...]
+
+
+@dataclass(frozen=True)
 class AttributionResult:
     symbol: str
     display_symbol: str
@@ -106,8 +146,17 @@ class AttributionResult:
     residual_pct: float | None
     classification: str
     evidence: Evidence | None
+    evidence_audit: EvidenceAudit
     mapping_uncertain: bool
     relevance_score: float
+
+    @property
+    def has_high_confidence_evidence(self) -> bool:
+        return self.evidence is not None and self.evidence.confidence == "HIGH"
+
+    @property
+    def is_unresolved_exception(self) -> bool:
+        return not self.has_high_confidence_evidence and abs(self.change_pct) >= EXCEPTION_MOVE_THRESHOLD_PCT
 
 
 def load_benchmark_config(path: Path | None = None) -> dict:
@@ -250,6 +299,14 @@ def _is_generic_article(title: str) -> bool:
     return any(pattern in normalized for pattern in GENERIC_ARTICLE_PATTERNS)
 
 
+def _confidence_for_source(source: str, domain: str, quality: dict) -> str:
+    high_sources = [str(item).lower() for item in quality.get("high_confidence_sources", [])]
+    high_domains = [str(item).lower() for item in quality.get("high_confidence_domains", [])]
+    if source.lower() in high_sources or (domain and _domain_matches(domain, high_domains)):
+        return "HIGH"
+    return "MEDIUM"
+
+
 def _article_timestamp(article: dict) -> float | None:
     raw = article.get("published_at")
     if isinstance(raw, (int, float)):
@@ -301,7 +358,7 @@ def _recency_bonus(
     return max_bonus * decay
 
 
-def evidence_for_articles(articles: list[dict], config: dict) -> Evidence | None:
+def evaluate_article_evidence(articles: list[dict], config: dict) -> EvidenceAudit:
     quality = config.get("source_quality", {})
     blocked_domains = [str(item).lower() for item in quality.get("blocked_domains", [])]
     allowed_domains = [str(item).lower() for item in quality.get("allowed_domains", [])]
@@ -315,22 +372,30 @@ def evidence_for_articles(articles: list[dict], config: dict) -> Evidence | None
     low_value_template_penalty = float(scoring.get("low_value_template_penalty", 1.5))
     low_value_patterns = _compile_patterns(scoring.get("low_value_template_patterns", []))
     candidates: list[tuple[float, float, int, Evidence]] = []
+    audits: list[EvidenceCandidateAudit] = []
 
     for index, article in enumerate(articles):
         title = str(article.get("title") or "").strip()
-        if not title or _is_generic_article(title):
+        link = str(article.get("link") or "").strip()
+        domain = _domain(link)
+        source = str(article.get("source") or domain or "Source").strip()
+        if not title:
+            audits.append(EvidenceCandidateAudit(title="", source=source, link=link, status="rejected", reason="missing_title"))
+            continue
+        if _is_generic_article(title):
+            audits.append(EvidenceCandidateAudit(title=title, source=source, link=link, status="rejected", reason="generic_price_action"))
             continue
         has_catalyst = _has_catalyst(title)
         if not has_catalyst:
+            audits.append(EvidenceCandidateAudit(title=title, source=source, link=link, status="rejected", reason="no_direct_catalyst"))
             continue
-        link = str(article.get("link") or "").strip()
-        domain = _domain(link)
         if domain and _domain_matches(domain, blocked_domains):
+            audits.append(EvidenceCandidateAudit(title=title, source=source, link=link, status="rejected", reason="blocked_domain"))
             continue
-        source = str(article.get("source") or domain or "Source").strip()
         source_l = source.lower()
         allowed = source_l in allowed_sources or (domain and _domain_matches(domain, allowed_domains))
         if not allowed:
+            audits.append(EvidenceCandidateAudit(title=title, source=source, link=link, status="rejected", reason="source_not_allowed"))
             continue
         published_at = _article_timestamp(article)
         score = 0.0
@@ -344,26 +409,85 @@ def evidence_for_articles(articles: list[dict], config: dict) -> Evidence | None
         )
         score -= _template_hit_count(title, low_value_patterns) * low_value_template_penalty
         if score < min_score:
+            audits.append(
+                EvidenceCandidateAudit(
+                    title=title,
+                    source=source,
+                    link=link,
+                    status="rejected",
+                    reason="below_quality_threshold",
+                    score=round(score, 3),
+                )
+            )
             continue
+        confidence = _confidence_for_source(source, domain, quality)
+        if confidence != "HIGH":
+            audits.append(
+                EvidenceCandidateAudit(
+                    title=title,
+                    source=source,
+                    link=link,
+                    status="context",
+                    reason="not_high_confidence_source",
+                    score=round(score, 3),
+                    confidence=confidence,
+                )
+            )
+            continue
+        evidence = Evidence(
+            title=title,
+            title_de=(str(article.get("title_de") or "").strip() or None),
+            source=source,
+            link=link,
+            confidence=confidence,
+        )
+        audits.append(
+            EvidenceCandidateAudit(
+                title=title,
+                source=source,
+                link=link,
+                status="eligible",
+                reason="direct_catalyst",
+                score=round(score, 3),
+                confidence=confidence,
+            )
+        )
         candidates.append(
             (
                 score,
                 published_at or 0.0,
                 index,
-                Evidence(
-                    title=title,
-                    title_de=(str(article.get("title_de") or "").strip() or None),
-                    source=source,
-                    link=link,
-                    confidence="HIGH",
-                ),
+                evidence,
             )
         )
 
     if not candidates:
-        return None
+        status = "no_source_coverage" if not articles else "no_high_confidence_evidence"
+        return EvidenceAudit(status=status, checked_count=len(articles), selected=None, candidates=tuple(audits))
     candidates.sort(key=lambda item: (-item[0], -item[1], item[2]))
-    return candidates[0][3]
+    selected = candidates[0][3]
+    selected_audits = [
+        EvidenceCandidateAudit(
+            title=audit.title,
+            source=audit.source,
+            link=audit.link,
+            status="selected" if audit.title == selected.title and audit.link == selected.link else audit.status,
+            reason=audit.reason,
+            score=audit.score,
+            confidence=audit.confidence,
+        )
+        for audit in audits
+    ]
+    return EvidenceAudit(
+        status="selected",
+        checked_count=len(articles),
+        selected=selected,
+        candidates=tuple(selected_audits),
+    )
+
+
+def evidence_for_articles(articles: list[dict], config: dict) -> Evidence | None:
+    return evaluate_article_evidence(articles, config).selected
 
 
 def _classification(
@@ -435,7 +559,8 @@ def build_attributions(stocks: dict, benchmark_quotes: dict, config: dict) -> li
         currency_change = _change_pct(benchmark_quotes.get(mapping.currency_ticker))
         residual = round(float(change) - benchmark_change, 1) if benchmark_change is not None else None
         classification = _classification(float(change), benchmark_change, market_change, currency_change, residual, mapping.uncertain)
-        evidence = evidence_for_articles(data.get("articles") or [], config)
+        evidence_audit = evaluate_article_evidence(data.get("articles") or [], config)
+        evidence = evidence_audit.selected
         score = abs(float(change)) + (_target_weight(info) * 100)
         results.append(
             AttributionResult(
@@ -454,6 +579,7 @@ def build_attributions(stocks: dict, benchmark_quotes: dict, config: dict) -> li
                 residual_pct=residual,
                 classification=classification,
                 evidence=evidence,
+                evidence_audit=evidence_audit,
                 mapping_uncertain=mapping.uncertain,
                 relevance_score=score,
             )
@@ -461,3 +587,56 @@ def build_attributions(stocks: dict, benchmark_quotes: dict, config: dict) -> li
 
     results.sort(key=lambda item: (-item.relevance_score, CLASSIFICATION_ORDER.get(item.classification, 9)))
     return results
+
+
+def evidence_audit_payload(results: list[AttributionResult]) -> list[dict]:
+    payload = []
+    for result in results:
+        payload.append(
+            {
+                "symbol": result.symbol,
+                "display_symbol": result.display_symbol,
+                "change_pct": result.change_pct,
+                "classification": result.classification,
+                "visible_normal": result.has_high_confidence_evidence,
+                "visible_exception": result.is_unresolved_exception,
+                "evidence_status": result.evidence_audit.status,
+                "selected_evidence": _evidence_payload(result.evidence_audit.selected),
+                "candidates": [
+                    {
+                        "title": candidate.title,
+                        "source": candidate.source,
+                        "link": candidate.link,
+                        "status": candidate.status,
+                        "reason": candidate.reason,
+                        "score": candidate.score,
+                        "confidence": candidate.confidence,
+                    }
+                    for candidate in result.evidence_audit.candidates
+                ],
+                "attribution": {
+                    "benchmark_ticker": result.benchmark_ticker,
+                    "benchmark_label": result.benchmark_label,
+                    "benchmark_change_pct": result.benchmark_change_pct,
+                    "market_ticker": result.market_ticker,
+                    "market_change_pct": result.market_change_pct,
+                    "currency_ticker": result.currency_ticker,
+                    "currency_change_pct": result.currency_change_pct,
+                    "residual_pct": result.residual_pct,
+                    "mapping_uncertain": result.mapping_uncertain,
+                },
+            }
+        )
+    return payload
+
+
+def _evidence_payload(evidence: Evidence | None) -> dict | None:
+    if evidence is None:
+        return None
+    return {
+        "title": evidence.title,
+        "title_de": evidence.title_de,
+        "source": evidence.source,
+        "link": evidence.link,
+        "confidence": evidence.confidence,
+    }

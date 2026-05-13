@@ -103,6 +103,26 @@
       "tagesschau.de",
       "zeit.de"
     ],
+    "high_confidence_sources": [
+      "Reuters",
+      "Wall Street Journal",
+      "WSJ",
+      "Financial Times",
+      "FT",
+      "Bloomberg",
+      "CNBC",
+      "MarketWatch",
+      "Handelsblatt"
+    ],
+    "high_confidence_domains": [
+      "reuters.com",
+      "wsj.com",
+      "ft.com",
+      "bloomberg.com",
+      "cnbc.com",
+      "marketwatch.com",
+      "handelsblatt.com"
+    ],
     "blocked_domains": [
       "fool.com",
       "benzinga.com",

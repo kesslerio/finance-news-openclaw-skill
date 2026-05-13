@@ -28,6 +28,7 @@ from portfolio_attribution import (
     AttributionResult,
     benchmark_tickers_for_portfolio,
     build_attributions,
+    evidence_audit_payload,
     load_benchmark_config,
 )
 from ranking import rank_headlines
@@ -454,6 +455,26 @@ def write_debug_log(args, market_data: dict, portfolio_data: dict | None) -> Non
     (cache_dir / f"briefing-debug-{stamp}.json").write_text(
         json.dumps(payload, indent=2, ensure_ascii=False)
     )
+
+
+def write_portfolio_evidence_artifact(args, audit_payload: list[dict]) -> str | None:
+    """Write structured portfolio evidence audit data for later inspection."""
+    if not audit_payload:
+        return None
+    cache_dir = SCRIPT_DIR.parent / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    now = datetime.now()
+    stamp = now.strftime("%Y-%m-%d-%H%M%S")
+    path = cache_dir / f"portfolio-evidence-{stamp}.json"
+    payload = {
+        "timestamp": now.isoformat(),
+        "time": args.time,
+        "style": args.style,
+        "language": args.lang,
+        "portfolio_evidence_audit": audit_payload,
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+    return str(path)
 
 
 def extract_agent_reply(raw: str) -> str:
@@ -1598,6 +1619,49 @@ def _evidence_line(result: AttributionResult, labels: dict, language: str) -> st
     return f"• {title} ({result.evidence.source}, {confidence}: {confidence_value})"
 
 
+def _unresolved_exception_line(result: AttributionResult, labels: dict) -> str:
+    text = labels.get(
+        "portfolio_attr_unresolved_exception",
+        "large move; no high-confidence direct catalyst found",
+    )
+    return f"• {text}"
+
+
+def _result_header_line(result: AttributionResult) -> str:
+    emoji = "📈" if result.change_pct >= 0 else "📉"
+    price_str = format_price_for_currency(result.price, result.currency)
+    return f"\n**{result.display_symbol}** {emoji} {price_str} ({result.change_pct:+.2f}%)"
+
+
+def _render_portfolio_results(
+    attributions: list[AttributionResult],
+    labels: dict,
+    language: str,
+) -> list[str]:
+    explained = [result for result in attributions if result.has_high_confidence_evidence]
+    exceptions = [result for result in attributions if result.is_unresolved_exception]
+    explained.sort(key=lambda result: abs(result.change_pct), reverse=True)
+    exceptions.sort(key=lambda result: abs(result.change_pct), reverse=True)
+
+    lines: list[str] = []
+    for result in explained:
+        lines.append(_result_header_line(result))
+        lines.append(_attribution_line(result, labels))
+        lines.append(_evidence_line(result, labels, language))
+
+    if exceptions:
+        unresolved_heading = labels.get("heading_portfolio_unresolved", "Unresolved large moves")
+        lines.append(f"\n**{unresolved_heading}**")
+        for result in exceptions:
+            lines.append(_result_header_line(result))
+            lines.append(_attribution_line(result, labels))
+            lines.append(_unresolved_exception_line(result, labels))
+
+    if not lines:
+        lines.append(labels.get("portfolio_attr_no_visible_movers", "No high-confidence explained movers"))
+    return lines
+
+
 def build_portfolio_message(
     portfolio_data: dict,
     labels: dict,
@@ -1605,6 +1669,7 @@ def build_portfolio_message(
     deadline: float | None = None,
     benchmark_quotes: dict | None = None,
     benchmark_config: dict | None = None,
+    attributions: list[AttributionResult] | None = None,
 ) -> str:
     """Build an attribution-first portfolio movers message."""
     if not portfolio_data:
@@ -1623,14 +1688,10 @@ def build_portfolio_message(
         header_line = f"{header_line} (Top {len(stocks_raw)} of {total_stocks})"
     lines = [header_line]
 
-    config = benchmark_config or load_benchmark_config()
-    attributions = build_attributions(stocks_raw, benchmark_quotes or {}, config)
-    for result in attributions:
-        emoji = "📈" if result.change_pct >= 0 else "📉"
-        price_str = format_price_for_currency(result.price, result.currency)
-        lines.append(f"\n**{result.display_symbol}** {emoji} {price_str} ({result.change_pct:+.2f}%)")
-        lines.append(_attribution_line(result, labels))
-        lines.append(_evidence_line(result, labels, language))
+    if attributions is None:
+        config = benchmark_config or load_benchmark_config()
+        attributions = build_attributions(stocks_raw, benchmark_quotes or {}, config)
+    lines.extend(_render_portfolio_results(attributions, labels, language))
 
     return "\n".join(lines)
 
@@ -1658,10 +1719,6 @@ def build_briefing_summary(
     heading_reco = labels.get("heading_watchpoints", "Watchpoints")
     no_data = labels.get("no_data", "No data available")
     no_movers = labels.get("no_movers", "No significant moves (±1%)")
-    rec_bullish = labels.get("rec_bullish", "Selective opportunities, keep risk management tight.")
-    rec_bearish = labels.get("rec_bearish", "Reduce risk and prioritize liquidity.")
-    rec_neutral = labels.get("rec_neutral", "Wait-and-see, focus on quality names.")
-    rec_unknown = labels.get("rec_unknown", "No clear recommendation without reliable data.")
 
     sentiment_map = labels.get("sentiment_map", {})
     sentiment_display = sentiment_map.get(sentiment, sentiment)
@@ -1703,7 +1760,6 @@ def build_briefing_summary(
                 change = idx_data.get("change_percent")
                 name = idx.get("name", symbol)
                 if price is not None and change is not None:
-                    emoji = "📈" if change >= 0 else "📉"
                     region_indices.append(f"{name}: {price:,.0f} ({change:+.2f}%)")
             if region_indices:
                 lines.append(f"• {' | '.join(region_indices)}")
@@ -2073,6 +2129,8 @@ def generate_briefing(args):
 
     # Message 2: Portfolio (if available)
     portfolio_output = ""
+    portfolio_evidence_audit: list[dict] = []
+    portfolio_evidence_artifact = None
     if portfolio_data:
         benchmark_config = load_benchmark_config()
         try:
@@ -2085,6 +2143,18 @@ def generate_briefing(args):
         except Exception as exc:
             print(f"⚠️ Skipping portfolio benchmark quotes: {exc}", file=sys.stderr)
             benchmark_quotes = {}
+        portfolio_attributions = build_attributions(portfolio_data.get("stocks", {}), benchmark_quotes, benchmark_config)
+        portfolio_evidence_audit = evidence_audit_payload(portfolio_attributions)
+        try:
+            portfolio_evidence_artifact = write_portfolio_evidence_artifact(args, portfolio_evidence_audit)
+        except Exception as exc:
+            print(f"⚠️ Skipping portfolio evidence artifact: {exc}", file=sys.stderr)
+            portfolio_evidence_artifact = None
+        if args.debug:
+            debug_payload.update({
+                "portfolio_evidence_audit": portfolio_evidence_audit,
+                "portfolio_evidence_artifact": portfolio_evidence_artifact,
+            })
         portfolio_output = build_portfolio_message(
             portfolio_data,
             labels,
@@ -2092,6 +2162,7 @@ def generate_briefing(args):
             deadline=deadline,
             benchmark_quotes=benchmark_quotes,
             benchmark_config=benchmark_config,
+            attributions=portfolio_attributions,
         )
         portfolio_output = format_whatsapp_message(portfolio_output)
         
@@ -2117,6 +2188,8 @@ def generate_briefing(args):
             },
             'macro_message': macro_output,
             'portfolio_message': portfolio_output, # New field
+            'portfolio_evidence_artifact': portfolio_evidence_artifact,
+            'portfolio_evidence_audit': portfolio_evidence_audit,
             'sources': [
                 {'index': idx + 1, 'url': item.get('link', ''), 'source': item.get('source', ''), 'links': sorted(list(item.get('links', [])))}
                 for idx, item in enumerate(top_headlines)

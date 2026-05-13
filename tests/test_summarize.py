@@ -2,6 +2,7 @@
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
@@ -285,7 +286,7 @@ def test_format_symbol_display_international_ticker():
     assert display == "Novo Nordisk (NOVO-B.CO)"
 
 
-def test_build_portfolio_message_renders_attribution_without_source_dump():
+def test_build_portfolio_message_omits_mover_without_high_confidence_evidence():
     portfolio_data = {
         "meta": {"total_stocks": 2},
         "stocks": {
@@ -320,12 +321,92 @@ def test_build_portfolio_message_renders_attribution_without_source_dump():
         benchmark_config=benchmark_config,
     )
 
-    assert "Novo Nordisk (NOVO-B.CO)" in output
-    assert "Einordnung: sektor-/themengetrieben" in output
-    assert "Restbewegung -0.5%" in output
-    assert "kein bestätigter Auslöser" in output
+    assert "Novo Nordisk (NOVO-B.CO)" not in output
+    assert "No high-confidence explained movers" in output
+    assert "kein bestätigter Auslöser" not in output
     assert "## Quellen" not in output
     assert "finance.yahoo.com" not in output
+
+
+def test_build_portfolio_message_renders_high_confidence_explained_mover():
+    labels = summarize.load_config()["translations"]["de"]
+    portfolio_data = {
+        "stocks": {
+            "ZURN.SW": {
+                "quote": {"price": 569.2, "change_percent": 5.2, "currency": "CHF"},
+                "info": {"name": "Zurich Insurance Group", "category": "Financials"},
+                "articles": [
+                    {
+                        "title": "Zurich Insurance reports Q1 revenue growth as P&C demand improves",
+                        "title_de": "Zurich Insurance meldet Q1-Umsatzwachstum bei stärkerer P&C-Nachfrage",
+                        "link": "https://www.reuters.com/business/finance/zurich-insurance-q1-2026-05-13/",
+                        "source": "Reuters",
+                    }
+                ],
+            }
+        },
+    }
+
+    output = build_portfolio_message(
+        portfolio_data,
+        labels,
+        "de",
+        benchmark_quotes={"EWL": {"change_percent": 0.1}, "XLF": {"change_percent": 0.2}, "CHF=X": {"change_percent": 0.0}},
+        benchmark_config=summarize.load_benchmark_config(),
+    )
+
+    assert "Zurich Insurance Group (ZURN.SW)" in output
+    assert "Zurich Insurance meldet Q1-Umsatzwachstum" in output
+    assert "Konfidenz: HOCH" in output
+    assert "kein bestätigter Auslöser" not in output
+
+
+def test_build_portfolio_message_renders_large_unresolved_exception():
+    labels = summarize.load_config()["translations"]["de"]
+    portfolio_data = {
+        "stocks": {
+            "SPGI": {
+                "quote": {"price": 403.95, "change_percent": -9.2},
+                "info": {"name": "S&P Global", "category": "Financials"},
+                "articles": [],
+            }
+        },
+    }
+
+    output = build_portfolio_message(
+        portfolio_data,
+        labels,
+        "de",
+        benchmark_quotes={"SPY": {"change_percent": 0.1}, "XLF": {"change_percent": -0.2}},
+        benchmark_config=summarize.load_benchmark_config(),
+    )
+
+    assert "Ungeklärte große Bewegungen" in output
+    assert "**SPGI**" in output
+    assert "große Bewegung; kein belastbarer direkter Auslöser gefunden" in output
+    assert "kein bestätigter Auslöser" not in output
+
+
+def test_write_portfolio_evidence_artifact_records_audit_payload(tmp_path, monkeypatch):
+    monkeypatch.setattr(summarize, "SCRIPT_DIR", tmp_path / "scripts")
+    args = SimpleNamespace(time="morning", style="briefing", lang="de")
+    audit_payload = [
+        {
+            "symbol": "ZURN.SW",
+            "visible_normal": True,
+            "evidence_status": "selected",
+            "selected_evidence": {"source": "Reuters", "confidence": "HIGH"},
+            "candidates": [],
+        }
+    ]
+
+    path = summarize.write_portfolio_evidence_artifact(args, audit_payload)
+
+    assert path is not None
+    data = json.loads(Path(path).read_text())
+    assert data["time"] == "morning"
+    assert data["language"] == "de"
+    assert data["portfolio_evidence_audit"] == audit_payload
 
 
 def test_build_portfolio_message_uses_non_usd_price_symbol():
@@ -334,7 +415,13 @@ def test_build_portfolio_message_uses_non_usd_price_symbol():
             "6861.T": {
                 "quote": {"price": 27830.0, "change_percent": -5.2},
                 "info": {"name": "Keyence", "category": "Industrials"},
-                "articles": [],
+                "articles": [
+                    {
+                        "title": "Keyence raises guidance as factory automation demand improves",
+                        "link": "https://www.reuters.com/world/asia-pacific/keyence-guidance-2026-05-13/",
+                        "source": "Reuters",
+                    }
+                ],
             }
         }
     }
