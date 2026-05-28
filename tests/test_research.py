@@ -15,7 +15,7 @@ from research import (
     format_market_data,
     format_portfolio_news,
     format_raw_data_report,
-    gemini_available,
+    agy_available,
     generate_research_content,
     kimi_available,
     ollama_available,
@@ -230,10 +230,10 @@ class TestProviderAvailability:
         with patch("shutil.which", return_value="/usr/local/bin/ollama"):
             assert kimi_available() is True
 
-    def test_gemini_available_checks_gemini(self):
-        """Gemini fallback availability checks gemini CLI."""
-        with patch("shutil.which", return_value="/usr/local/bin/gemini"):
-            assert gemini_available() is True
+    def test_agy_available_checks_agy(self):
+        """Agy fallback availability checks agy CLI."""
+        with patch("shutil.which", return_value="/usr/local/bin/agy"):
+            assert agy_available() is True
 
 
 class TestResearchWithKimi:
@@ -298,15 +298,16 @@ class TestResearchWithKimi:
 class TestResearchWithGemini:
     """Tests for research_with_gemini()."""
 
-    def test_research_with_gemini_uses_gemini_cli(self):
-        """Gemini fallback uses gemini -p."""
+    def test_research_with_gemini_uses_agy_cli(self):
+        """Fallback uses agy -p with high-thinking model by default."""
         mock_result = Mock()
         mock_result.returncode = 0
-        mock_result.stdout = "Gemini report"
+        mock_result.stdout = "Agy report"
 
         with patch("subprocess.run", return_value=mock_result) as mock_run:
-            assert research_with_gemini("content") == "Gemini report"
-            assert mock_run.call_args[0][0][:2] == ["gemini", "-p"]
+            assert research_with_gemini("content") == "Agy report"
+            assert mock_run.call_args[0][0][:2] == ["agy", "-p"]
+            assert mock_run.call_args.kwargs["env"]["AI_MODEL"] == "gemini-3.5-flash-high"
 
 
 class TestFormatRawDataReport:
@@ -358,7 +359,7 @@ class TestGenerateResearchContent:
         """Use Gemini when Kimi is unavailable or fails."""
         with patch("research.kimi_available", return_value=True):
             with patch("research.research_with_kimi", return_value="⚠️ Kimi research error: timeout"):
-                with patch("research.gemini_available", return_value=True):
+                with patch("research.agy_available", return_value=True):
                     with patch("research.research_with_gemini", return_value="Gemini report") as mock_gemini:
                         result = generate_research_content(sample_market_data, sample_portfolio_data)
 
@@ -369,7 +370,7 @@ class TestGenerateResearchContent:
     def test_falls_back_to_raw_report(self, sample_market_data, sample_portfolio_data):
         """Fall back to raw report when LLM providers are unavailable."""
         with patch("research.kimi_available", return_value=False):
-            with patch("research.gemini_available", return_value=False):
+            with patch("research.agy_available", return_value=False):
                 result = generate_research_content(sample_market_data, sample_portfolio_data)
 
             assert "## Market Data" in result["report"]

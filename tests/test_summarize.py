@@ -7,6 +7,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from datetime import datetime
+from unittest.mock import Mock
 
 import summarize
 from summarize import (
@@ -166,22 +167,22 @@ def test_translate_headlines_uses_ollama_kimi_first(monkeypatch):
     )
 
     def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("Gemini fallback should not be called when Kimi succeeds")
+        raise AssertionError("Agy fallback should not be called when Kimi succeeds")
 
-    monkeypatch.setattr(summarize, "translate_via_gemini_cli", fail_if_called)
+    monkeypatch.setattr(summarize, "translate_via_agy_cli", fail_if_called)
 
     translated, success = summarize.translate_headlines(["Title"], deadline=None)
     assert success is True
     assert translated == ["Titel"]
 
 
-def test_translate_headlines_falls_back_to_gemini(monkeypatch):
+def test_translate_headlines_falls_back_to_agy(monkeypatch):
     monkeypatch.setattr(
         summarize,
         "translate_via_ollama_kimi",
         lambda titles, deadline: (titles, False),
     )
-    monkeypatch.setattr(summarize, "translate_via_gemini_cli", lambda titles, deadline: (["Titel"], True))
+    monkeypatch.setattr(summarize, "translate_via_agy_cli", lambda titles, deadline: (["Titel"], True))
 
     translated, success = summarize.translate_headlines(["Title"], deadline=None)
     assert success is True
@@ -217,11 +218,23 @@ def test_translate_via_ollama_kimi_length_mismatch(monkeypatch):
     assert translated == ["Title A", "Title B", "Title C"]
 
 
-def test_translate_via_gemini_cli_success(monkeypatch):
-    monkeypatch.setattr(summarize, "run_gemini_prompt", lambda *_a, **_k: '["Titel"]')
-    translated, success = summarize.translate_via_gemini_cli(["Title"], deadline=None)
+def test_translate_via_agy_cli_success(monkeypatch):
+    monkeypatch.setattr(summarize, "run_agy_prompt", lambda *_a, **_k: '["Titel"]')
+    translated, success = summarize.translate_via_agy_cli(["Title"], deadline=None)
     assert success is True
     assert translated == ["Titel"]
+
+
+def test_run_agy_prompt_sets_medium_model(monkeypatch):
+    result = Mock()
+    result.returncode = 0
+    result.stdout = "OK"
+    monkeypatch.setattr(summarize.subprocess, "run", Mock(return_value=result))
+
+    assert summarize.run_agy_prompt("prompt", deadline=None) == "OK"
+    call = summarize.subprocess.run.call_args
+    assert call[0][0][:2] == ["agy", "-p"]
+    assert call.kwargs["env"]["AI_MODEL"] == "gemini-3.5-flash-medium"
 
 
 def test_translate_via_ollama_kimi_empty_list():
@@ -674,9 +687,9 @@ def test_summarize_with_kimi_missing_ollama(monkeypatch):
 
 
 def test_summarize_with_gemini_success(monkeypatch):
-    monkeypatch.setattr(summarize, "run_gemini_prompt", lambda *_a, **_k: "## Analysis\n\nGemini body")
+    monkeypatch.setattr(summarize, "run_agy_prompt", lambda *_a, **_k: "## Analysis\n\nAgy body")
     summary = summarize.summarize_with_gemini("Raw content", language="en", style="analysis", deadline=None)
-    assert "Gemini body" in summary
+    assert "Agy body" in summary
     assert "informational purposes only" in summary
 
 

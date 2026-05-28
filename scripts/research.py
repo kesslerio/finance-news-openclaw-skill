@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Research Module - Deep research using Ollama Kimi with Gemini CLI fallback.
+Research Module - Deep research using Ollama Kimi with Agy CLI fallback.
 Crawls articles, finds correlations, researches companies.
 Outputs research_report.md for later analysis.
 """
@@ -22,6 +22,7 @@ SCRIPT_DIR = Path(__file__).parent
 CONFIG_DIR = SCRIPT_DIR.parent / "config"
 OUTPUT_DIR = SCRIPT_DIR.parent / "research"
 DEFAULT_OLLAMA_KIMI_MODEL = "kimi-k2.6:cloud"
+DEFAULT_AGY_MODEL = "gemini-3.5-flash-high"
 
 
 ensure_venv()
@@ -89,6 +90,14 @@ def get_ollama_kimi_model() -> str:
     ).strip()
 
 
+def get_agy_model(default: str = DEFAULT_AGY_MODEL) -> str:
+    return (
+        os.getenv("FINANCE_NEWS_AGY_MODEL")
+        or os.getenv("AGY_MODEL")
+        or default
+    ).strip()
+
+
 def ollama_available() -> bool:
     return shutil.which('ollama') is not None
 
@@ -97,8 +106,8 @@ def kimi_available() -> bool:
     return ollama_available()
 
 
-def gemini_available() -> bool:
-    return shutil.which('gemini') is not None
+def agy_available() -> bool:
+    return shutil.which('agy') is not None
 
 
 def build_research_prompt(content: str, focus_areas: list | None = None) -> str:
@@ -144,13 +153,20 @@ Deliver a substantial report (500-800 words).
     return prompt
 
 
-def run_prompt_command(command: list[str], prompt: str, timeout: int, error_label: str) -> str:
+def run_prompt_command(
+    command: list[str],
+    prompt: str,
+    timeout: int,
+    error_label: str,
+    env: dict[str, str] | None = None,
+) -> str:
     try:
         result = subprocess.run(
             [*command, prompt],
             capture_output=True,
             text=True,
-            timeout=timeout
+            timeout=timeout,
+            env={**os.environ, **env} if env else None,
         )
 
         if result.returncode == 0:
@@ -175,9 +191,15 @@ def research_with_kimi(content: str, focus_areas: list | None = None) -> str:
 
 
 def research_with_gemini(content: str, focus_areas: list | None = None) -> str:
-    """Perform deep research using Gemini CLI fallback."""
+    """Perform deep research using Agy CLI fallback."""
     prompt = build_research_prompt(content, focus_areas)
-    return run_prompt_command(["gemini", "-p"], prompt, 120, "Gemini research error")
+    return run_prompt_command(
+        ["agy", "-p"],
+        prompt,
+        120,
+        "Agy research error",
+        {"AI_MODEL": get_agy_model()},
+    )
 
 
 def format_raw_data_report(market_data: dict, portfolio_data: dict) -> str:
@@ -205,7 +227,7 @@ def generate_research_content(market_data: dict, portfolio_data: dict, focus_are
                 'report': report,
                 'source': 'kimi'
             }
-    if gemini_available():
+    if agy_available():
         report = research_with_gemini(raw_report, focus_areas)
         if not report.startswith("⚠️"):
             return {
@@ -263,7 +285,7 @@ def generate_research_report(args):
     if source == 'kimi':
         print("🔬 Running deep research with Ollama Kimi...", file=sys.stderr)
     elif source == 'gemini':
-        print("🔬 Running deep research with Gemini CLI...", file=sys.stderr)
+        print("🔬 Running deep research with Agy CLI...", file=sys.stderr)
     else:
         print("🧾 LLM research unavailable; using raw data report", file=sys.stderr)
     

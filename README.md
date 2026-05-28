@@ -59,7 +59,7 @@ finance-news briefing --morning --lang de --fast --deadline 300
 | `OLLAMA_KIMI_MODEL` | Secondary override for the Ollama Kimi model | `kimi-k2.6:cloud` |
 | `SKILL_DIR` | Path to skill directory (for Lobster) | `$HOME/projects/finance-news-openclaw-skill` |
 
-LLM generation defaults to `ollama run kimi-k2.6:cloud <prompt>` and falls back to `gemini -p <prompt>`.
+LLM generation defaults to `ollama run kimi-k2.6:cloud <prompt>` and falls back to `AI_MODEL=gemini-3.5-flash-medium agy -p <prompt>`. Deep research uses `gemini-3.5-flash-high` by default. Override with `FINANCE_NEWS_AGY_MODEL` or `AGY_MODEL`.
 
 ## Installation
 
