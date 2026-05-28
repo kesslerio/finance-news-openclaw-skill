@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 News Summarizer - Generate market briefings in configurable language.
-Uses local Ollama Kimi for briefing generation with Gemini CLI fallback.
+Uses local Ollama Kimi for briefing generation with Agy CLI fallback.
 """
 
 import argparse
@@ -43,6 +43,7 @@ MAX_HEADLINES_IN_PROMPT = 10
 TOP_HEADLINES_COUNT = 5
 DEFAULT_LLM_FALLBACK = ["kimi", "gemini"]
 DEFAULT_OLLAMA_KIMI_MODEL = "kimi-k2.6:cloud"
+DEFAULT_AGY_MODEL = "gemini-3.5-flash-medium"
 DEFAULT_KIMI_API_BASE_URL = "https://api.kimi.com/coding/"
 DEFAULT_KIMI_API_MODEL = "k2p5"
 HEADLINE_SHORTLIST_SIZE = 20
@@ -161,6 +162,14 @@ def get_kimi_api_model() -> str:
         os.getenv("FINANCE_NEWS_KIMI_MODEL")
         or os.getenv("KIMI_MODEL")
         or DEFAULT_KIMI_API_MODEL
+    ).strip()
+
+
+def get_agy_model(default: str = DEFAULT_AGY_MODEL) -> str:
+    return (
+        os.getenv("FINANCE_NEWS_AGY_MODEL")
+        or os.getenv("AGY_MODEL")
+        or default
     ).strip()
 
 
@@ -514,6 +523,7 @@ def _run_prompt_command(
     deadline: float | None,
     timeout: int,
     error_label: str,
+    env: dict[str, str] | None = None,
 ) -> str:
     try:
         proc_timeout = clamp_timeout(timeout, deadline)
@@ -521,7 +531,8 @@ def _run_prompt_command(
             [*command, prompt],
             capture_output=True,
             text=True,
-            timeout=proc_timeout
+            timeout=proc_timeout,
+            env={**os.environ, **env} if env else None,
         )
     except subprocess.TimeoutExpired:
         return f"⚠️ {error_label}: timeout"
@@ -590,13 +601,14 @@ def run_ollama_kimi_prompt(prompt: str, deadline: float | None = None, timeout: 
     return _run_kimi_api_prompt(prompt, deadline, timeout)
 
 
-def run_gemini_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
+def run_agy_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
     return _run_prompt_command(
-        ["gemini", "-p"],
+        ["agy", "-p"],
         prompt,
         deadline,
         timeout,
-        "Gemini briefing error",
+        "Agy briefing error",
+        env={"AI_MODEL": get_agy_model()},
     )
 
 
@@ -606,14 +618,14 @@ def run_agent_prompt(
     session_id: str = "finance-news-headlines",
     timeout: int = 45,
 ) -> str:
-    """Run a prompt through Ollama Kimi, then Gemini CLI if Kimi fails."""
+    """Run a prompt through Ollama Kimi, then Agy CLI if Kimi fails."""
     del session_id
     reply = run_ollama_kimi_prompt(prompt, deadline=deadline, timeout=timeout)
     if not reply.startswith("⚠️"):
         return reply
 
-    print(f"  ↳ {reply}; falling back to gemini -p", file=sys.stderr)
-    return run_gemini_prompt(prompt, deadline=deadline, timeout=timeout)
+    print(f"  ↳ {reply}; falling back to agy -p", file=sys.stderr)
+    return run_agy_prompt(prompt, deadline=deadline, timeout=timeout)
 
 
 def normalize_title(title: str) -> str:
@@ -1132,7 +1144,7 @@ def translate_headlines(
 ) -> tuple[list[str], bool]:
     """Translate headlines to German using LLM.
 
-    Uses local Ollama Kimi first, then Gemini CLI.
+    Uses local Ollama Kimi first, then Agy CLI.
     Returns (translated_titles, success) or (original_titles, False) on failure.
     """
     if not titles:
@@ -1144,10 +1156,10 @@ def translate_headlines(
         print("  ↳ ✅ Translation successful via Ollama Kimi", file=sys.stderr)
         return translated, True
 
-    print("  ↳ Ollama Kimi failed, falling back to gemini -p", file=sys.stderr)
-    translated, success = translate_via_gemini_cli(titles, deadline=deadline)
+    print("  ↳ Ollama Kimi failed, falling back to agy -p", file=sys.stderr)
+    translated, success = translate_via_agy_cli(titles, deadline=deadline)
     if success:
-        print("  ↳ ✅ Translation successful via Gemini CLI", file=sys.stderr)
+        print("  ↳ ✅ Translation successful via Agy CLI", file=sys.stderr)
         return translated, True
 
     return titles, False
@@ -1217,11 +1229,11 @@ def translate_via_ollama_kimi(
     return _translate_via_prompt_runner(titles, deadline, run_ollama_kimi_prompt, "Ollama Kimi")
 
 
-def translate_via_gemini_cli(
+def translate_via_agy_cli(
     titles: list[str],
     deadline: float | None,
 ) -> tuple[list[str], bool]:
-    return _translate_via_prompt_runner(titles, deadline, run_gemini_prompt, "Gemini CLI")
+    return _translate_via_prompt_runner(titles, deadline, run_agy_prompt, "Agy CLI")
 
 
 def translate_headline_items(headlines: list[dict], deadline: float | None) -> bool:
@@ -1336,9 +1348,9 @@ def summarize_with_gemini(
     style: str = "briefing",
     deadline: float | None = None,
 ) -> str:
-    """Generate AI summary using Gemini CLI fallback."""
+    """Generate AI summary using Agy CLI fallback."""
     prompt = _build_summary_prompt(content, language, style)
-    reply_text = run_gemini_prompt(prompt, deadline=deadline, timeout=60)
+    reply_text = run_agy_prompt(prompt, deadline=deadline, timeout=60)
     if reply_text.startswith("⚠️"):
         return reply_text
     return reply_text + format_disclaimer(language)
@@ -1888,7 +1900,7 @@ def generate_briefing(args):
     )
 
     # Headline selection uses deterministic ranking first; the LLM path uses
-    # local Ollama Kimi with Gemini CLI fallback.
+    # local Ollama Kimi with Agy CLI fallback.
 
     shortlist_by_lang = config.get("headline_shortlist_size_by_lang", {})
     shortlist_size = HEADLINE_SHORTLIST_SIZE
