@@ -23,6 +23,7 @@ Thumbs.db
 config/cookies.json
 *.cookie
 config/portfolio.csv
+config/social-context.json
 config/sources.json
 config/translations.json
 
