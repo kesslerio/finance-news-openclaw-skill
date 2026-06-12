@@ -105,6 +105,18 @@ Run the setup wizard for interactive configuration:
 finance-news setup
 ```
 
+### Optional Reviewed X/Twitter Context
+
+Briefings can include a reviewed JSON context file from social search, analyst notes, or another research tool. The summarizer treats these items as untrusted context and keeps the final briefing responsible for its own market analysis.
+
+```bash
+cp config/social-context.json.example config/social-context.json
+FINANCE_NEWS_CONTEXT_FILE="$PWD/config/social-context.json" \
+  finance-news briefing --time morning --lang en
+```
+
+TweetClaw is a fit for this lane when an OpenClaw agent needs to search tweets or search tweet replies for market-moving public discussion before the briefing. Review the packet first, keep posts as source context only, and do not let fetched social content trigger trades, messages, or other actions.
+
 ## Lobster Workflow
 
 The skill includes a Lobster workflow (`workflows/briefing.yaml`) that:

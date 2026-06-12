@@ -99,3 +99,31 @@ def test_generate_and_send_failure():
         
         with pytest.raises(SystemExit):
             generate_and_send(args)
+
+
+def test_generate_and_send_passes_context_file():
+    mock_briefing_data = {"macro_message": "Macro Summary"}
+
+    with patch("briefing.subprocess.run") as mock_run:
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps(mock_briefing_data)
+        mock_run.return_value = mock_result
+
+        args = Mock()
+        args.time = "morning"
+        args.style = "briefing"
+        args.lang = "en"
+        args.deadline = None
+        args.fast = False
+        args.llm = False
+        args.debug = False
+        args.json = True
+        args.send = False
+        args.context_file = "config/social-context.json"
+
+        generate_and_send(args)
+
+        call_args = mock_run.call_args[0][0]
+        assert "--context-file" in call_args
+        assert "config/social-context.json" in call_args

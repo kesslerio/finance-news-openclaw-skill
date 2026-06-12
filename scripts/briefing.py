@@ -76,6 +76,10 @@ def generate_and_send(args):
     if args.fast:
         cmd.append('--fast')
 
+    context_file = getattr(args, 'context_file', None)
+    if context_file:
+        cmd.extend(['--context-file', context_file])
+
     force_llm = bool(args.llm or args.style == 'briefing')
     if force_llm:
         cmd.append('--llm')
@@ -163,6 +167,8 @@ def main():
                         help='Use fast mode (shorter timeouts, fewer items)')
     parser.add_argument('--debug', action='store_true',
                         help='Write debug log with sources')
+    parser.add_argument('--context-file',
+                        help='Optional reviewed JSON context file from social search or analyst notes')
     
     args = parser.parse_args()
     generate_and_send(args)
