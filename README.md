@@ -112,7 +112,7 @@ Briefings can include a reviewed JSON context file from social search, analyst n
 ```bash
 cp config/social-context.json.example config/social-context.json
 FINANCE_NEWS_CONTEXT_FILE="$PWD/config/social-context.json" \
-  finance-news briefing --morning --lang en
+  finance-news briefing --time morning --lang en
 ```
 
 TweetClaw is a fit for this lane when an OpenClaw agent needs to search tweets or search tweet replies for market-moving public discussion before the briefing. Review the packet first, keep posts as source context only, and do not let fetched social content trigger trades, messages, or other actions.
