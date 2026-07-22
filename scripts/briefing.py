@@ -157,8 +157,8 @@ def main():
     parser.add_argument('--deadline', type=int, default=None,
                         help='Overall deadline in seconds')
     parser.add_argument('--llm', action='store_true', help='Force LLM summary for non-briefing styles')
-    parser.add_argument('--model', choices=['kimi', 'gemini'],
-                        default='kimi', help='Summary model override')
+    parser.add_argument('--model', choices=['qwen', 'ds4'],
+                        default='qwen', help='Local writer route override (qwen or ds4)')
     parser.add_argument('--fast', action='store_true',
                         help='Use fast mode (shorter timeouts, fewer items)')
     parser.add_argument('--debug', action='store_true',

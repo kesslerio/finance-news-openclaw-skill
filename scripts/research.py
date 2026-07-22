@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Research Module - Deep research using Ollama Kimi with Agy CLI fallback.
+Research Module - Deep research using the local gx10 DeepSeek-V4-Flash (DS4)
+route, with the local kalliope Qwen route as fallback.
 Crawls articles, finds correlations, researches companies.
 Outputs research_report.md for later analysis.
 """
@@ -8,21 +9,25 @@ Outputs research_report.md for later analysis.
 import argparse
 import json
 import os
-import shutil
-import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
-from utils import ensure_venv
+from utils import call_openai_chat, ensure_venv
 
 from fetch_news import PortfolioError, get_market_news, get_portfolio_news
 
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_DIR = SCRIPT_DIR.parent / "config"
 OUTPUT_DIR = SCRIPT_DIR.parent / "research"
-DEFAULT_OLLAMA_KIMI_MODEL = "kimi-k2.6:cloud"
-DEFAULT_AGY_MODEL = "gemini-3.5-flash-high"
+# Deep research is a genuinely complex / materiality task -> DS4-high primary,
+# local Qwen fallback. Both are OpenAI-compatible tailnet routes.
+DEFAULT_DS4_BASE_URL = "http://gx10r-head:8888/v1"
+DEFAULT_DS4_MODEL = "deepseek-v4-flash-dspark"
+DEFAULT_QWEN_BASE_URL = "http://100.124.155.99:4000/v1"
+DEFAULT_QWEN_MODEL = "qwen3.6:35b-a3b"
+RESEARCH_MAX_TOKENS = int(os.getenv("FINANCE_NEWS_RESEARCH_MAX_TOKENS", "2048"))
+RESEARCH_TIMEOUT = int(os.getenv("FINANCE_NEWS_RESEARCH_TIMEOUT", "120"))
 
 
 ensure_venv()
@@ -82,32 +87,28 @@ def format_portfolio_news(portfolio_data: dict) -> str:
     return '\n'.join(lines)
 
 
-def get_ollama_kimi_model() -> str:
+def get_ds4_base_url() -> str:
+    return (os.getenv("FINANCE_NEWS_DS4_BASE_URL") or DEFAULT_DS4_BASE_URL).strip()
+
+
+def get_ds4_model() -> str:
     return (
-        os.getenv("FINANCE_NEWS_OLLAMA_KIMI_MODEL")
-        or os.getenv("OLLAMA_KIMI_MODEL")
-        or DEFAULT_OLLAMA_KIMI_MODEL
+        os.getenv("FINANCE_NEWS_DS4_MODEL")
+        or os.getenv("DS4_MODEL")
+        or DEFAULT_DS4_MODEL
     ).strip()
 
 
-def get_agy_model(default: str = DEFAULT_AGY_MODEL) -> str:
+def get_qwen_base_url() -> str:
+    return (os.getenv("FINANCE_NEWS_QWEN_BASE_URL") or DEFAULT_QWEN_BASE_URL).strip()
+
+
+def get_qwen_model() -> str:
     return (
-        os.getenv("FINANCE_NEWS_AGY_MODEL")
-        or os.getenv("AGY_MODEL")
-        or default
+        os.getenv("FINANCE_NEWS_QWEN_MODEL")
+        or os.getenv("QWEN_MODEL")
+        or DEFAULT_QWEN_MODEL
     ).strip()
-
-
-def ollama_available() -> bool:
-    return shutil.which('ollama') is not None
-
-
-def kimi_available() -> bool:
-    return ollama_available()
-
-
-def agy_available() -> bool:
-    return shutil.which('agy') is not None
 
 
 def build_research_prompt(content: str, focus_areas: list | None = None) -> str:
@@ -153,52 +154,35 @@ Deliver a substantial report (500-800 words).
     return prompt
 
 
-def run_prompt_command(
-    command: list[str],
-    prompt: str,
-    timeout: int,
-    error_label: str,
-    env: dict[str, str] | None = None,
-) -> str:
-    try:
-        result = subprocess.run(
-            [*command, prompt],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env={**os.environ, **env} if env else None,
-        )
-
-        if result.returncode == 0:
-            return result.stdout.strip()
-        return f"⚠️ {error_label}: {result.stderr}"
-
-    except subprocess.TimeoutExpired:
-        return f"⚠️ {error_label}: timeout"
-    except FileNotFoundError:
-        return f"⚠️ {error_label}: {command[0]} CLI not found"
-
-
-def research_with_kimi(content: str, focus_areas: list | None = None) -> str:
-    """Perform deep research using Ollama Kimi."""
+def research_with_ds4(content: str, focus_areas: list | None = None) -> str:
+    """Perform deep research using the local DS4-high route (primary)."""
     prompt = build_research_prompt(content, focus_areas)
-    return run_prompt_command(
-        ["ollama", "run", get_ollama_kimi_model()],
+    api_key = (os.getenv("FINANCE_NEWS_DS4_API_KEY") or "").strip() or None
+    return call_openai_chat(
         prompt,
-        120,
-        "Kimi research error",
+        base_url=get_ds4_base_url(),
+        model=get_ds4_model(),
+        api_key=api_key,
+        max_tokens=RESEARCH_MAX_TOKENS,
+        timeout=RESEARCH_TIMEOUT,
+        error_label="DS4 research error",
     )
 
 
-def research_with_gemini(content: str, focus_areas: list | None = None) -> str:
-    """Perform deep research using Agy CLI fallback."""
+def research_with_qwen(content: str, focus_areas: list | None = None) -> str:
+    """Perform deep research using the local Qwen route (fallback)."""
     prompt = build_research_prompt(content, focus_areas)
-    return run_prompt_command(
-        ["agy", "-p"],
+    api_key = (os.getenv("KALLIOPE_SERVING_API_KEY") or "").strip()
+    if not api_key:
+        return "⚠️ Qwen research error: KALLIOPE_SERVING_API_KEY not set"
+    return call_openai_chat(
         prompt,
-        120,
-        "Agy research error",
-        {"AI_MODEL": get_agy_model()},
+        base_url=get_qwen_base_url(),
+        model=get_qwen_model(),
+        api_key=api_key,
+        max_tokens=RESEARCH_MAX_TOKENS,
+        timeout=RESEARCH_TIMEOUT,
+        error_label="Qwen research error",
     )
 
 
@@ -220,20 +204,20 @@ def generate_research_content(market_data: dict, portfolio_data: dict, focus_are
             'report': '',
             'source': 'none'
         }
-    if kimi_available():
-        report = research_with_kimi(raw_report, focus_areas)
-        if not report.startswith("⚠️"):
-            return {
-                'report': report,
-                'source': 'kimi'
-            }
-    if agy_available():
-        report = research_with_gemini(raw_report, focus_areas)
-        if not report.startswith("⚠️"):
-            return {
-                'report': report,
-                'source': 'gemini'
-            }
+    report = research_with_ds4(raw_report, focus_areas)
+    if not report.startswith("⚠️"):
+        return {
+            'report': report,
+            'source': 'ds4'
+        }
+    print(f"  ↳ {report}; falling back to Qwen route", file=sys.stderr)
+    report = research_with_qwen(raw_report, focus_areas)
+    if not report.startswith("⚠️"):
+        return {
+            'report': report,
+            'source': 'qwen'
+        }
+    print(f"  ↳ {report}; using raw data report", file=sys.stderr)
     return {
         'report': raw_report,
         'source': 'raw'
@@ -282,10 +266,10 @@ def generate_research_report(args):
         print("⚠️ No data available for research", file=sys.stderr)
         return
 
-    if source == 'kimi':
-        print("🔬 Running deep research with Ollama Kimi...", file=sys.stderr)
-    elif source == 'gemini':
-        print("🔬 Running deep research with Agy CLI...", file=sys.stderr)
+    if source == 'ds4':
+        print("🔬 Running deep research with DS4-high route...", file=sys.stderr)
+    elif source == 'qwen':
+        print("🔬 Running deep research with Qwen route...", file=sys.stderr)
     else:
         print("🧾 LLM research unavailable; using raw data report", file=sys.stderr)
     

@@ -55,11 +55,19 @@ finance-news briefing --morning --lang de --fast --deadline 300
 |----------|-------------|---------|
 | `FINANCE_NEWS_TARGET` | Delivery target (WhatsApp JID, group name, or Telegram chat ID) | *Required* |
 | `FINANCE_NEWS_CHANNEL` | Delivery channel | `whatsapp` or `telegram` |
-| `FINANCE_NEWS_OLLAMA_KIMI_MODEL` | Ollama model used for Kimi summaries/research | `kimi-k2.6:cloud` |
-| `OLLAMA_KIMI_MODEL` | Secondary override for the Ollama Kimi model | `kimi-k2.6:cloud` |
+| `KALLIOPE_SERVING_API_KEY` | Bearer token for the local Qwen route (required) | *Required* |
+| `FINANCE_NEWS_QWEN_BASE_URL` | Qwen route base URL | `http://100.124.155.99:4000/v1` |
+| `FINANCE_NEWS_QWEN_MODEL` | Qwen model for summaries/selection/translation | `qwen3.6:35b-a3b` |
+| `FINANCE_NEWS_DS4_BASE_URL` | DS4 route base URL (fallback writer / deep-research primary) | `http://gx10r-head:8888/v1` |
+| `FINANCE_NEWS_DS4_MODEL` | DS4 model | `deepseek-v4-flash-dspark` |
+| `FINANCE_NEWS_DS4_API_KEY` | Optional bearer token for the DS4 route | *(unset)* |
 | `SKILL_DIR` | Path to skill directory (for Lobster) | `$HOME/projects/finance-news-openclaw-skill` |
 
-LLM generation defaults to `ollama run kimi-k2.6:cloud <prompt>` and falls back to `AI_MODEL=gemini-3.5-flash-medium agy -p <prompt>`. Deep research uses `gemini-3.5-flash-high` by default. Override with `FINANCE_NEWS_AGY_MODEL` or `AGY_MODEL`.
+Summaries, headline selection, and translation default to the local **Qwen** route
+(`qwen3.6:35b-a3b` on kalliope) with the local **DS4** route
+(`deepseek-v4-flash-dspark` on gx10) as fallback. Deep research (`research.py`) uses the
+**DS4-high** route as primary with the Qwen route as fallback. All routes are
+OpenAI-compatible tailnet endpoints; there is no cloud fallback.
 
 ## Installation
 

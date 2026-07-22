@@ -226,16 +226,16 @@
   },
   "llm": {
     "headline_model_order": [
-      "kimi",
-      "gemini"
+      "qwen",
+      "ds4"
     ],
     "summary_model_order": [
-      "kimi",
-      "gemini"
+      "qwen",
+      "ds4"
     ],
     "translation_model_order": [
-      "kimi",
-      "gemini"
+      "qwen",
+      "ds4"
     ]
   },
   "translations": {
