@@ -7,7 +7,6 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from datetime import datetime
-from unittest.mock import Mock
 
 import summarize
 from summarize import (
@@ -74,7 +73,9 @@ def test_format_market_data_handles_non_numeric_change_percent():
     assert "- Nasdaq: 22450 (N/A)" in result
 
 
-def test_run_ollama_kimi_prompt_calls_kimi_api(monkeypatch):
+def test_run_qwen_prompt_calls_qwen_api(monkeypatch):
+    import utils
+
     captured = {}
 
     def fake_urlopen(req, timeout):
@@ -82,30 +83,53 @@ def test_run_ollama_kimi_prompt_calls_kimi_api(monkeypatch):
         captured["timeout"] = timeout
         captured["headers"] = dict(req.header_items())
         captured["payload"] = json.loads(req.data.decode("utf-8"))
-        return _FakeUrlopenResponse({"content": [{"type": "text", "text": "Kimi response"}]})
+        return _FakeUrlopenResponse({"choices": [{"message": {"content": "Qwen response"}}]})
 
-    monkeypatch.setenv("KIMI_API_KEY", "test-key")
-    monkeypatch.setenv("KIMI_API_BASE_URL", "https://api.kimi.test/coding/")
-    monkeypatch.setenv("FINANCE_NEWS_KIMI_MODEL", "k2p5-test")
-    monkeypatch.setattr(summarize.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("KALLIOPE_SERVING_API_KEY", "test-key")
+    monkeypatch.setenv("FINANCE_NEWS_QWEN_BASE_URL", "http://qwen.test/v1")
+    monkeypatch.setenv("FINANCE_NEWS_QWEN_MODEL", "qwen-test")
+    monkeypatch.setattr(utils.urllib.request, "urlopen", fake_urlopen)
 
-    result = summarize.run_ollama_kimi_prompt("Write a briefing", deadline=None, timeout=45)
+    result = summarize.run_qwen_prompt("Write a briefing", deadline=None, timeout=45)
 
-    assert result == "Kimi response"
-    assert captured["url"] == "https://api.kimi.test/coding/v1/messages"
+    assert result == "Qwen response"
+    assert captured["url"] == "http://qwen.test/v1/chat/completions"
     assert captured["timeout"] == 45
     assert captured["headers"]["Authorization"] == "Bearer test-key"
-    assert captured["payload"]["model"] == "k2p5-test"
+    assert captured["payload"]["model"] == "qwen-test"
     assert captured["payload"]["messages"] == [{"role": "user", "content": "Write a briefing"}]
 
 
-def test_run_ollama_kimi_prompt_requires_kimi_key(monkeypatch):
-    monkeypatch.delenv("KIMI_API_KEY", raising=False)
-    monkeypatch.delenv("KIMI_API_KEY_WORK", raising=False)
+def test_run_qwen_prompt_requires_api_key(monkeypatch):
+    monkeypatch.delenv("KALLIOPE_SERVING_API_KEY", raising=False)
 
-    result = summarize.run_ollama_kimi_prompt("Write a briefing", deadline=None, timeout=45)
+    result = summarize.run_qwen_prompt("Write a briefing", deadline=None, timeout=45)
 
-    assert result == "⚠️ Kimi briefing error: KIMI_API_KEY or KIMI_API_KEY_WORK not set"
+    assert result == "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set"
+
+
+def test_run_ds4_prompt_calls_ds4_api_without_key(monkeypatch):
+    import utils
+
+    captured = {}
+
+    def fake_urlopen(req, timeout):
+        captured["url"] = req.full_url
+        captured["headers"] = dict(req.header_items())
+        captured["payload"] = json.loads(req.data.decode("utf-8"))
+        return _FakeUrlopenResponse({"choices": [{"message": {"content": "DS4 response"}}]})
+
+    monkeypatch.delenv("FINANCE_NEWS_DS4_API_KEY", raising=False)
+    monkeypatch.setenv("FINANCE_NEWS_DS4_BASE_URL", "http://ds4.test/v1")
+    monkeypatch.setenv("FINANCE_NEWS_DS4_MODEL", "ds4-test")
+    monkeypatch.setattr(utils.urllib.request, "urlopen", fake_urlopen)
+
+    result = summarize.run_ds4_prompt("Write a briefing", deadline=None, timeout=45)
+
+    assert result == "DS4 response"
+    assert captured["url"] == "http://ds4.test/v1/chat/completions"
+    assert "Authorization" not in captured["headers"]
+    assert captured["payload"]["model"] == "ds4-test"
 
 
 def test_extract_portfolio_movers_reuses_existing_quotes():
@@ -147,99 +171,87 @@ def test_format_whatsapp_message_replaces_markdown_headings_and_bold():
     ]
 
 
-def test_translate_via_ollama_kimi_parses_markdown_json(monkeypatch):
+def test_translate_via_qwen_parses_markdown_json(monkeypatch):
     monkeypatch.setattr(
         summarize,
-        "run_ollama_kimi_prompt",
+        "run_qwen_prompt",
         lambda *_a, **_k: "```json\n[\"Titel A\", \"Titel B\"]\n```",
     )
 
-    translated, success = summarize.translate_via_ollama_kimi(["Title A", "Title B"], deadline=None)
+    translated, success = summarize.translate_via_qwen(["Title A", "Title B"], deadline=None)
     assert success is True
     assert translated == ["Titel A", "Titel B"]
 
 
-def test_translate_headlines_uses_ollama_kimi_first(monkeypatch):
+def test_translate_headlines_uses_qwen_first(monkeypatch):
     monkeypatch.setattr(
         summarize,
-        "translate_via_ollama_kimi",
+        "translate_via_qwen",
         lambda titles, deadline: (["Titel"], True),
     )
 
     def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("Agy fallback should not be called when Kimi succeeds")
+        raise AssertionError("DS4 fallback should not be called when Qwen succeeds")
 
-    monkeypatch.setattr(summarize, "translate_via_agy_cli", fail_if_called)
+    monkeypatch.setattr(summarize, "translate_via_ds4", fail_if_called)
 
     translated, success = summarize.translate_headlines(["Title"], deadline=None)
     assert success is True
     assert translated == ["Titel"]
 
 
-def test_translate_headlines_falls_back_to_agy(monkeypatch):
+def test_translate_headlines_falls_back_to_ds4(monkeypatch):
     monkeypatch.setattr(
         summarize,
-        "translate_via_ollama_kimi",
+        "translate_via_qwen",
         lambda titles, deadline: (titles, False),
     )
-    monkeypatch.setattr(summarize, "translate_via_agy_cli", lambda titles, deadline: (["Titel"], True))
+    monkeypatch.setattr(summarize, "translate_via_ds4", lambda titles, deadline: (["Titel"], True))
 
     translated, success = summarize.translate_headlines(["Title"], deadline=None)
     assert success is True
     assert translated == ["Titel"]
 
 
-def test_translate_via_ollama_kimi_timeout(monkeypatch):
+def test_translate_via_qwen_timeout(monkeypatch):
     """Falls back on timeout."""
-    monkeypatch.setattr(summarize, "run_ollama_kimi_prompt", lambda *_a, **_k: "⚠️ Kimi briefing error: timeout")
+    monkeypatch.setattr(summarize, "run_qwen_prompt", lambda *_a, **_k: "⚠️ Qwen briefing error: timeout")
 
-    translated, success = summarize.translate_via_ollama_kimi(["Title"], deadline=None)
+    translated, success = summarize.translate_via_qwen(["Title"], deadline=None)
     assert success is False
     assert translated == ["Title"]
 
 
-def test_translate_via_ollama_kimi_malformed_json(monkeypatch):
+def test_translate_via_qwen_malformed_json(monkeypatch):
     """Falls back when provider returns non-JSON."""
-    monkeypatch.setattr(summarize, "run_ollama_kimi_prompt", lambda *_a, **_k: "not json at all")
+    monkeypatch.setattr(summarize, "run_qwen_prompt", lambda *_a, **_k: "not json at all")
 
-    translated, success = summarize.translate_via_ollama_kimi(["Title"], deadline=None)
+    translated, success = summarize.translate_via_qwen(["Title"], deadline=None)
     assert success is False
     assert translated == ["Title"]
 
 
-def test_translate_via_ollama_kimi_length_mismatch(monkeypatch):
+def test_translate_via_qwen_length_mismatch(monkeypatch):
     """Falls back when API returns wrong number of translations."""
-    monkeypatch.setattr(summarize, "run_ollama_kimi_prompt", lambda *_a, **_k: '["Only One"]')
+    monkeypatch.setattr(summarize, "run_qwen_prompt", lambda *_a, **_k: '["Only One"]')
 
-    translated, success = summarize.translate_via_ollama_kimi(
+    translated, success = summarize.translate_via_qwen(
         ["Title A", "Title B", "Title C"], deadline=None,
     )
     assert success is False
     assert translated == ["Title A", "Title B", "Title C"]
 
 
-def test_translate_via_agy_cli_success(monkeypatch):
-    monkeypatch.setattr(summarize, "run_agy_prompt", lambda *_a, **_k: '["Titel"]')
-    translated, success = summarize.translate_via_agy_cli(["Title"], deadline=None)
+def test_translate_via_ds4_success(monkeypatch):
+    monkeypatch.setattr(summarize, "run_ds4_prompt", lambda *_a, **_k: '["Titel"]')
+    translated, success = summarize.translate_via_ds4(["Title"], deadline=None)
     assert success is True
     assert translated == ["Titel"]
 
 
-def test_run_agy_prompt_sets_medium_model(monkeypatch):
-    result = Mock()
-    result.returncode = 0
-    result.stdout = "OK"
-    monkeypatch.setattr(summarize.subprocess, "run", Mock(return_value=result))
-
-    assert summarize.run_agy_prompt("prompt", deadline=None) == "OK"
-    call = summarize.subprocess.run.call_args
-    assert call[0][0][:2] == ["agy", "-p"]
-    assert call.kwargs["env"]["AI_MODEL"] == "gemini-3.5-flash-medium"
-
-
-def test_translate_via_ollama_kimi_empty_list():
+def test_translate_via_qwen_empty_list():
     """Returns empty list for empty input."""
-    translated, success = summarize.translate_via_ollama_kimi([], deadline=None)
+    translated, success = summarize.translate_via_qwen([], deadline=None)
     assert success is True
     assert translated == []
 
@@ -616,7 +628,7 @@ Beobachten.
     monkeypatch.setattr(summarize, "get_market_news", fake_market_news)
     monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
-    monkeypatch.setattr(summarize, "summarize_with_kimi", fake_summary)
+    monkeypatch.setattr(summarize, "summarize_with_qwen", fake_summary)
     monkeypatch.setattr(summarize, "validate_briefing_structure", lambda *_a, **_k: (True, []))
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
 
@@ -627,7 +639,7 @@ Beobachten.
             "lang": "de",
             "style": "briefing",
             "time": None,
-            "model": "kimi",
+            "model": "qwen",
             "json": False,
             "research": False,
             "deadline": None,
@@ -642,7 +654,7 @@ Beobachten.
     assert "Börsen Abend-Briefing" in stdout
 
 
-def test_summarize_with_kimi_uses_localized_briefing_headings(monkeypatch):
+def test_summarize_with_qwen_uses_localized_briefing_headings(monkeypatch):
     captured = {}
 
     def fake_runner(prompt, deadline=None, timeout=60):
@@ -650,46 +662,46 @@ def test_summarize_with_kimi_uses_localized_briefing_headings(monkeypatch):
         captured["timeout"] = timeout
         return "### Märkte\n\nAlles ruhig."
 
-    monkeypatch.setattr(summarize, "run_ollama_kimi_prompt", fake_runner)
+    monkeypatch.setattr(summarize, "run_qwen_prompt", fake_runner)
 
-    summary = summarize.summarize_with_kimi("Raw content", language="de", style="briefing", deadline=None)
+    summary = summarize.summarize_with_qwen("Raw content", language="de", style="briefing", deadline=None)
     prompt = captured["prompt"]
     assert "### Märkte" in prompt
     assert "### Sentiment" not in prompt
     assert summary.startswith("### Märkte")
 
 
-def test_summarize_with_kimi_success(monkeypatch):
+def test_summarize_with_qwen_success(monkeypatch):
     captured = {}
 
     def fake_runner(prompt, deadline=None, timeout=60):
         captured["prompt"] = prompt
         captured["timeout"] = timeout
-        return "## Market Briefing\n\nKimi summary body"
+        return "## Market Briefing\n\nQwen summary body"
 
-    monkeypatch.setattr(summarize, "run_ollama_kimi_prompt", fake_runner)
+    monkeypatch.setattr(summarize, "run_qwen_prompt", fake_runner)
 
-    summary = summarize.summarize_with_kimi("Raw content", language="en", style="briefing", deadline=None)
-    assert "Kimi summary body" in summary
+    summary = summarize.summarize_with_qwen("Raw content", language="en", style="briefing", deadline=None)
+    assert "Qwen summary body" in summary
     assert "informational purposes only" in summary
     assert "Raw content" in captured["prompt"]
     assert captured["timeout"] == 60
 
 
-def test_summarize_with_kimi_missing_ollama(monkeypatch):
+def test_summarize_with_qwen_error_passthrough(monkeypatch):
     monkeypatch.setattr(
         summarize,
-        "run_ollama_kimi_prompt",
-        lambda *_a, **_k: "⚠️ Kimi briefing error: ollama CLI not found",
+        "run_qwen_prompt",
+        lambda *_a, **_k: "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set",
     )
-    summary = summarize.summarize_with_kimi("Raw content", language="en", style="briefing", deadline=None)
-    assert summary == "⚠️ Kimi briefing error: ollama CLI not found"
+    summary = summarize.summarize_with_qwen("Raw content", language="en", style="briefing", deadline=None)
+    assert summary == "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set"
 
 
-def test_summarize_with_gemini_success(monkeypatch):
-    monkeypatch.setattr(summarize, "run_agy_prompt", lambda *_a, **_k: "## Analysis\n\nAgy body")
-    summary = summarize.summarize_with_gemini("Raw content", language="en", style="analysis", deadline=None)
-    assert "Agy body" in summary
+def test_summarize_with_ds4_success(monkeypatch):
+    monkeypatch.setattr(summarize, "run_ds4_prompt", lambda *_a, **_k: "## Analysis\n\nDS4 body")
+    summary = summarize.summarize_with_ds4("Raw content", language="en", style="analysis", deadline=None)
+    assert "DS4 body" in summary
     assert "informational purposes only" in summary
 
 
@@ -706,7 +718,7 @@ def test_generate_briefing_zero_deadline_disables_timeout(capsys, monkeypatch):
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
     monkeypatch.setattr(
         summarize,
-        "summarize_with_kimi",
+        "summarize_with_qwen",
         lambda *_a, **_k: (
             "### Märkte\nAlles ruhig.\n\n"
             "### Stimmung\nNeutral.\n\n"
@@ -723,7 +735,7 @@ def test_generate_briefing_zero_deadline_disables_timeout(capsys, monkeypatch):
             "lang": "de",
             "style": "briefing",
             "time": None,
-            "model": "kimi",
+            "model": "qwen",
             "json": True,
             "research": False,
             "deadline": 0.0,
@@ -736,10 +748,10 @@ def test_generate_briefing_zero_deadline_disables_timeout(capsys, monkeypatch):
     summarize.generate_briefing(args)
     payload = json.loads(capsys.readouterr().out)
     assert payload["summary_mode"] == "llm"
-    assert payload["summary_model_used"] == "kimi"
+    assert payload["summary_model_used"] == "qwen"
 
 
-def test_generate_briefing_falls_back_to_gemini_when_kimi_unavailable(capsys, monkeypatch):
+def test_generate_briefing_falls_back_to_ds4_when_qwen_unavailable(capsys, monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [
@@ -761,10 +773,10 @@ def test_generate_briefing_falls_back_to_gemini_when_kimi_unavailable(capsys, mo
     monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
-    monkeypatch.setattr(summarize, "summarize_with_kimi", lambda *_a, **_k: "⚠️ Kimi briefing error: ollama CLI not found")
+    monkeypatch.setattr(summarize, "summarize_with_qwen", lambda *_a, **_k: "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set")
     monkeypatch.setattr(
         summarize,
-        "summarize_with_gemini",
+        "summarize_with_ds4",
         lambda *_a, **_k: (
             "### Markets\nQuiet.\n\n"
             "### Sentiment\nNeutral.\n\n"
@@ -781,7 +793,7 @@ def test_generate_briefing_falls_back_to_gemini_when_kimi_unavailable(capsys, mo
             "lang": "en",
             "style": "briefing",
             "time": None,
-            "model": "kimi",
+            "model": "qwen",
             "json": True,
             "research": False,
             "deadline": None,
@@ -793,11 +805,11 @@ def test_generate_briefing_falls_back_to_gemini_when_kimi_unavailable(capsys, mo
 
     summarize.generate_briefing(args)
     payload = json.loads(capsys.readouterr().out)
-    assert payload["summary_model_used"] == "gemini"
+    assert payload["summary_model_used"] == "ds4"
     assert "### Markets" in payload["summary"]
 
 
-def test_generate_analysis_falls_back_to_gemini_when_kimi_unavailable(monkeypatch, capsys):
+def test_generate_analysis_falls_back_to_ds4_when_qwen_unavailable(monkeypatch, capsys):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [
@@ -817,8 +829,8 @@ def test_generate_analysis_falls_back_to_gemini_when_kimi_unavailable(monkeypatc
     monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
-    monkeypatch.setattr(summarize, "summarize_with_kimi", lambda *_a, **_k: "⚠️ Kimi briefing error: ollama CLI not found")
-    monkeypatch.setattr(summarize, "summarize_with_gemini", lambda *_a, **_k: "## Analysis\n\nGemini analysis body")
+    monkeypatch.setattr(summarize, "summarize_with_qwen", lambda *_a, **_k: "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set")
+    monkeypatch.setattr(summarize, "summarize_with_ds4", lambda *_a, **_k: "## Analysis\n\nDS4 analysis body")
 
     args = type(
         "Args",
@@ -827,7 +839,7 @@ def test_generate_analysis_falls_back_to_gemini_when_kimi_unavailable(monkeypatc
             "lang": "en",
             "style": "analysis",
             "time": None,
-            "model": "kimi",
+            "model": "qwen",
             "json": True,
             "research": False,
             "deadline": None,
@@ -839,11 +851,11 @@ def test_generate_analysis_falls_back_to_gemini_when_kimi_unavailable(monkeypatc
 
     summarize.generate_briefing(args)
     payload = json.loads(capsys.readouterr().out)
-    assert payload["summary_model_used"] == "gemini"
-    assert "Gemini analysis body" in payload["summary"]
+    assert payload["summary_model_used"] == "ds4"
+    assert "DS4 analysis body" in payload["summary"]
 
 
-def test_generate_analysis_uses_kimi_even_without_llm_flag(capsys, monkeypatch):
+def test_generate_analysis_uses_qwen_even_without_llm_flag(capsys, monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [
@@ -867,11 +879,11 @@ def test_generate_analysis_uses_kimi_even_without_llm_flag(capsys, monkeypatch):
 
     calls = {}
 
-    def fake_kimi(content, language, style, deadline=None):
+    def fake_qwen(content, language, style, deadline=None):
         calls["style"] = style
-        return "## Analysis\n\nKimi analysis body"
+        return "## Analysis\n\nQwen analysis body"
 
-    monkeypatch.setattr(summarize, "summarize_with_kimi", fake_kimi)
+    monkeypatch.setattr(summarize, "summarize_with_qwen", fake_qwen)
 
     args = type(
         "Args",
@@ -880,7 +892,7 @@ def test_generate_analysis_uses_kimi_even_without_llm_flag(capsys, monkeypatch):
             "lang": "en",
             "style": "analysis",
             "time": None,
-            "model": "kimi",
+            "model": "qwen",
             "json": True,
             "research": False,
             "deadline": None,
@@ -894,8 +906,8 @@ def test_generate_analysis_uses_kimi_even_without_llm_flag(capsys, monkeypatch):
     payload = json.loads(capsys.readouterr().out)
     assert calls["style"] == "analysis"
     assert payload["summary_mode"] == "llm"
-    assert payload["summary_model_used"] == "kimi"
-    assert "Kimi analysis body" in payload["summary"]
+    assert payload["summary_model_used"] == "qwen"
+    assert "Qwen analysis body" in payload["summary"]
 
 
 # --- Tests for watchpoints feature (Issue #92) ---
@@ -1197,7 +1209,7 @@ class TestBuildWatchpointsData:
         assert result.market_wide is True
 
 
-def test_generate_briefing_defaults_to_kimi_path(capsys, monkeypatch):
+def test_generate_briefing_defaults_to_qwen_path(capsys, monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [{"source": "CNBC", "title": "Headline one", "link": "https://example.com/1"}],
@@ -1209,7 +1221,7 @@ def test_generate_briefing_defaults_to_kimi_path(capsys, monkeypatch):
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
     monkeypatch.setattr(summarize, "validate_briefing_structure", lambda *_a, **_k: (True, []))
-    monkeypatch.setattr(summarize, "summarize_with_kimi", lambda *_a, **_k: "### Märkte\n\nAlles ruhig.\n\n### Stimmung\n\nNeutral.\n\n### Top 5 Schlagzeilen\n1. Headline one\n\n### Portfolio-Auswirkung\nBeobachten.\n\n### Beobachtungspunkte\n- Watch one")
+    monkeypatch.setattr(summarize, "summarize_with_qwen", lambda *_a, **_k: "### Märkte\n\nAlles ruhig.\n\n### Stimmung\n\nNeutral.\n\n### Top 5 Schlagzeilen\n1. Headline one\n\n### Portfolio-Auswirkung\nBeobachten.\n\n### Beobachtungspunkte\n- Watch one")
 
     args = type(
         "Args",
@@ -1218,7 +1230,7 @@ def test_generate_briefing_defaults_to_kimi_path(capsys, monkeypatch):
             "lang": "de",
             "style": "briefing",
             "time": None,
-            "model": "kimi",
+            "model": "qwen",
             "json": True,
             "research": False,
             "deadline": None,
@@ -1231,7 +1243,7 @@ def test_generate_briefing_defaults_to_kimi_path(capsys, monkeypatch):
     summarize.generate_briefing(args)
     payload = json.loads(capsys.readouterr().out)
     assert payload["summary_mode"] == "llm"
-    assert payload["summary_model_used"] == "kimi"
+    assert payload["summary_model_used"] == "qwen"
 
 
 def test_generate_analysis_hard_fails_when_configured_fallbacks_fail(monkeypatch):
@@ -1245,8 +1257,8 @@ def test_generate_analysis_hard_fails_when_configured_fallbacks_fail(monkeypatch
     monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
-    monkeypatch.setenv("FINANCE_NEWS_SUMMARY_FALLBACKS", "kimi")
-    monkeypatch.setattr(summarize, "summarize_with_kimi", lambda *_a, **_k: "⚠️ Kimi briefing error: ollama CLI not found")
+    monkeypatch.setenv("FINANCE_NEWS_SUMMARY_FALLBACKS", "qwen")
+    monkeypatch.setattr(summarize, "summarize_with_qwen", lambda *_a, **_k: "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set")
 
     args = type(
         "Args",
@@ -1255,7 +1267,7 @@ def test_generate_analysis_hard_fails_when_configured_fallbacks_fail(monkeypatch
             "lang": "en",
             "style": "analysis",
             "time": None,
-            "model": "kimi",
+            "model": "qwen",
             "json": True,
             "research": False,
             "deadline": None,
@@ -1266,5 +1278,5 @@ def test_generate_analysis_hard_fails_when_configured_fallbacks_fail(monkeypatch
     )()
 
     import pytest
-    with pytest.raises(RuntimeError, match="ollama CLI not found"):
+    with pytest.raises(RuntimeError, match="KALLIOPE_SERVING_API_KEY"):
         summarize.generate_briefing(args)

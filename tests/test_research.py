@@ -1,26 +1,23 @@
 """Tests for research.py - deep research module."""
 
-import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
 # Add scripts to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
+import research
 from research import (
     format_headlines,
     format_market_data,
     format_portfolio_news,
     format_raw_data_report,
-    agy_available,
     generate_research_content,
-    kimi_available,
-    ollama_available,
-    research_with_gemini,
-    research_with_kimi,
+    research_with_ds4,
+    research_with_qwen,
 )
 
 
@@ -212,102 +209,83 @@ class TestFormatPortfolioNews:
         assert "## Portfolio Analysis" in result
 
 
-class TestProviderAvailability:
-    """Tests for local LLM provider availability."""
+class TestResearchWithDS4:
+    """Tests for research_with_ds4() - the DS4-high primary route."""
 
-    def test_returns_true_when_ollama_found(self):
-        """Return True when ollama CLI is found."""
-        with patch("shutil.which", return_value="/usr/local/bin/ollama"):
-            assert ollama_available() is True
+    def test_successful_research(self, monkeypatch):
+        """Execute DS4 research successfully against the local route."""
+        captured = {}
 
-    def test_returns_false_when_ollama_not_found(self):
-        """Return False when ollama CLI is not found."""
-        with patch("shutil.which", return_value=None):
-            assert ollama_available() is False
+        def fake_call(prompt, **kwargs):
+            captured["prompt"] = prompt
+            captured["kwargs"] = kwargs
+            return "# Research Report\n\nMarket analysis..."
 
-    def test_kimi_available_aliases_ollama(self):
-        """Kimi availability is backed by Ollama."""
-        with patch("shutil.which", return_value="/usr/local/bin/ollama"):
-            assert kimi_available() is True
+        monkeypatch.setenv("FINANCE_NEWS_DS4_BASE_URL", "http://ds4.test/v1")
+        monkeypatch.setenv("FINANCE_NEWS_DS4_MODEL", "ds4-test")
+        monkeypatch.setattr(research, "call_openai_chat", fake_call)
 
-    def test_agy_available_checks_agy(self):
-        """Agy fallback availability checks agy CLI."""
-        with patch("shutil.which", return_value="/usr/local/bin/agy"):
-            assert agy_available() is True
+        result = research_with_ds4("Market data content")
 
+        assert result == "# Research Report\n\nMarket analysis..."
+        assert captured["kwargs"]["base_url"] == "http://ds4.test/v1"
+        assert captured["kwargs"]["model"] == "ds4-test"
 
-class TestResearchWithKimi:
-    """Tests for research_with_kimi()."""
-
-    def test_successful_research(self):
-        """Execute Ollama Kimi research successfully."""
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stdout = "# Research Report\n\nMarket analysis..."
-
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            result = research_with_kimi("Market data content")
-
-            assert result == "# Research Report\n\nMarket analysis..."
-            mock_run.assert_called_once()
-            assert mock_run.call_args[0][0][:3] == ["ollama", "run", "kimi-k2.6:cloud"]
-
-    def test_research_with_focus_areas(self):
+    def test_research_with_focus_areas(self, monkeypatch):
         """Include focus areas in prompt."""
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stdout = "Focused analysis"
+        captured = {}
 
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            result = research_with_kimi("content", focus_areas=["earnings", "macro"])
+        def fake_call(prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "Focused analysis"
 
-            assert result == "Focused analysis"
-            # Verify focus areas were in the prompt
-            call_args = mock_run.call_args[0][0]
-            prompt = call_args[-1]
-            assert "earnings" in prompt
-            assert "macro" in prompt
+        monkeypatch.setattr(research, "call_openai_chat", fake_call)
 
-    def test_handles_kimi_error(self):
-        """Handle Kimi error gracefully."""
-        mock_result = Mock()
-        mock_result.returncode = 1
-        mock_result.stderr = "API error"
+        result = research_with_ds4("content", focus_areas=["earnings", "macro"])
 
-        with patch("subprocess.run", return_value=mock_result):
-            result = research_with_kimi("content")
+        assert result == "Focused analysis"
+        assert "earnings" in captured["prompt"]
+        assert "macro" in captured["prompt"]
 
-            assert "⚠️ Kimi research error" in result
-            assert "API error" in result
+    def test_handles_route_error(self, monkeypatch):
+        """Handle DS4 route error gracefully (sentinel passthrough)."""
+        monkeypatch.setattr(
+            research,
+            "call_openai_chat",
+            lambda *_a, **_k: "⚠️ DS4 research error: HTTP 503: unavailable",
+        )
+        result = research_with_ds4("content")
 
-    def test_handles_timeout(self):
-        """Handle subprocess timeout."""
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="ollama", timeout=120)):
-            result = research_with_kimi("content")
-
-            assert "⚠️ Kimi research error: timeout" in result
-
-    def test_handles_missing_ollama(self):
-        """Handle missing ollama CLI."""
-        with patch("subprocess.run", side_effect=FileNotFoundError()):
-            result = research_with_kimi("content")
-
-            assert "⚠️ Kimi research error: ollama CLI not found" in result
+        assert "⚠️ DS4 research error" in result
 
 
-class TestResearchWithGemini:
-    """Tests for research_with_gemini()."""
+class TestResearchWithQwen:
+    """Tests for research_with_qwen() - the Qwen fallback route."""
 
-    def test_research_with_gemini_uses_agy_cli(self):
-        """Fallback uses agy -p with high-thinking model by default."""
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stdout = "Agy report"
+    def test_uses_qwen_route(self, monkeypatch):
+        """Fallback calls the local Qwen route with the serving key."""
+        captured = {}
 
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            assert research_with_gemini("content") == "Agy report"
-            assert mock_run.call_args[0][0][:2] == ["agy", "-p"]
-            assert mock_run.call_args.kwargs["env"]["AI_MODEL"] == "gemini-3.5-flash-high"
+        def fake_call(prompt, **kwargs):
+            captured["kwargs"] = kwargs
+            return "Qwen report"
+
+        monkeypatch.setenv("KALLIOPE_SERVING_API_KEY", "serving-key")
+        monkeypatch.setenv("FINANCE_NEWS_QWEN_BASE_URL", "http://qwen.test/v1")
+        monkeypatch.setenv("FINANCE_NEWS_QWEN_MODEL", "qwen-test")
+        monkeypatch.setattr(research, "call_openai_chat", fake_call)
+
+        assert research_with_qwen("content") == "Qwen report"
+        assert captured["kwargs"]["base_url"] == "http://qwen.test/v1"
+        assert captured["kwargs"]["model"] == "qwen-test"
+        assert captured["kwargs"]["api_key"] == "serving-key"
+
+    def test_requires_serving_key(self, monkeypatch):
+        """Fail closed when the serving key is missing."""
+        monkeypatch.delenv("KALLIOPE_SERVING_API_KEY", raising=False)
+        result = research_with_qwen("content")
+
+        assert result == "⚠️ Qwen research error: KALLIOPE_SERVING_API_KEY not set"
 
 
 class TestFormatRawDataReport:
@@ -345,32 +323,29 @@ class TestFormatRawDataReport:
 class TestGenerateResearchContent:
     """Tests for generate_research_content()."""
 
-    def test_uses_kimi_when_available(self, sample_market_data, sample_portfolio_data):
-        """Use Kimi research when available."""
-        with patch("research.kimi_available", return_value=True):
-            with patch("research.research_with_kimi", return_value="Kimi report") as mock_kimi:
+    def test_uses_ds4_primary(self, sample_market_data, sample_portfolio_data):
+        """Use the DS4-high route as the deep-research primary."""
+        with patch("research.research_with_ds4", return_value="DS4 report") as mock_ds4:
+            result = generate_research_content(sample_market_data, sample_portfolio_data)
+
+            assert result["report"] == "DS4 report"
+            assert result["source"] == "ds4"
+            mock_ds4.assert_called_once()
+
+    def test_falls_back_to_qwen_when_ds4_fails(self, sample_market_data, sample_portfolio_data):
+        """Use the Qwen route when the DS4 route fails."""
+        with patch("research.research_with_ds4", return_value="⚠️ DS4 research error: timeout"):
+            with patch("research.research_with_qwen", return_value="Qwen report") as mock_qwen:
                 result = generate_research_content(sample_market_data, sample_portfolio_data)
 
-                assert result["report"] == "Kimi report"
-                assert result["source"] == "kimi"
-                mock_kimi.assert_called_once()
-
-    def test_falls_back_to_gemini_when_kimi_fails(self, sample_market_data, sample_portfolio_data):
-        """Use Gemini when Kimi is unavailable or fails."""
-        with patch("research.kimi_available", return_value=True):
-            with patch("research.research_with_kimi", return_value="⚠️ Kimi research error: timeout"):
-                with patch("research.agy_available", return_value=True):
-                    with patch("research.research_with_gemini", return_value="Gemini report") as mock_gemini:
-                        result = generate_research_content(sample_market_data, sample_portfolio_data)
-
-                        assert result["report"] == "Gemini report"
-                        assert result["source"] == "gemini"
-                        mock_gemini.assert_called_once()
+                assert result["report"] == "Qwen report"
+                assert result["source"] == "qwen"
+                mock_qwen.assert_called_once()
 
     def test_falls_back_to_raw_report(self, sample_market_data, sample_portfolio_data):
-        """Fall back to raw report when LLM providers are unavailable."""
-        with patch("research.kimi_available", return_value=False):
-            with patch("research.agy_available", return_value=False):
+        """Fall back to raw report when both local routes fail."""
+        with patch("research.research_with_ds4", return_value="⚠️ DS4 research error: timeout"):
+            with patch("research.research_with_qwen", return_value="⚠️ Qwen research error: timeout"):
                 result = generate_research_content(sample_market_data, sample_portfolio_data)
 
             assert "## Market Data" in result["report"]
@@ -383,15 +358,13 @@ class TestGenerateResearchContent:
         assert result["report"] == ""
         assert result["source"] == "none"
 
-    def test_passes_focus_areas_to_kimi(self, sample_market_data, sample_portfolio_data):
-        """Pass focus areas to Kimi research."""
+    def test_passes_focus_areas_to_ds4(self, sample_market_data, sample_portfolio_data):
+        """Pass focus areas to DS4 research."""
         focus = ["earnings", "tech"]
-        with patch("research.kimi_available", return_value=True):
-            with patch("research.research_with_kimi", return_value="Report") as mock_kimi:
-                generate_research_content(sample_market_data, sample_portfolio_data, focus_areas=focus)
+        with patch("research.research_with_ds4", return_value="Report") as mock_ds4:
+            generate_research_content(sample_market_data, sample_portfolio_data, focus_areas=focus)
 
-                mock_kimi.assert_called_once()
-                # Check that focus_areas was passed (positional or keyword)
-                call_args = mock_kimi.call_args
-                # Focus areas passed as second positional arg
-                assert call_args[0][1] == focus or call_args.kwargs.get("focus_areas") == focus
+            mock_ds4.assert_called_once()
+            # Focus areas passed as second positional arg
+            call_args = mock_ds4.call_args
+            assert call_args[0][1] == focus or call_args.kwargs.get("focus_areas") == focus

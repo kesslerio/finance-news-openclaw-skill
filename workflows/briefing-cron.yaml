@@ -41,10 +41,14 @@ steps:
         OPENBB_MOUNT="-v $OPENBB_BIN:/usr/local/bin/openbb-quote:ro"
       fi
       docker run --rm \
+        --network host \
         --workdir /app \
-        -e KIMI_API_KEY \
-        -e KIMI_API_BASE_URL \
-        -e FINANCE_NEWS_KIMI_MODEL \
+        -e KALLIOPE_SERVING_API_KEY \
+        -e FINANCE_NEWS_QWEN_BASE_URL \
+        -e FINANCE_NEWS_QWEN_MODEL \
+        -e FINANCE_NEWS_DS4_BASE_URL \
+        -e FINANCE_NEWS_DS4_MODEL \
+        -e FINANCE_NEWS_DS4_API_KEY \
         -v "$SKILL_DIR/config:/app/config:ro" \
         -v "$SKILL_DIR/scripts:/app/scripts:ro" \
         $OPENBB_MOUNT \
@@ -80,7 +84,7 @@ steps:
       STRUCT_OK=$(jq -r '.summary_structure_ok // false' "$OUTFILE")
 
       case "$MODEL_USED" in
-        kimi) ;;
+        qwen|ds4) ;;
         *)
           echo "❌ Refusing to send briefing from unsupported writer"
           jq '{summary_mode, summary_model_used, summary_structure_ok, summary_missing_sections, generator}' "$OUTFILE"

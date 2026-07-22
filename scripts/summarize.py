@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 News Summarizer - Generate market briefings in configurable language.
-Uses local Ollama Kimi for briefing generation with Agy CLI fallback.
+Uses the local kalliope Qwen route for briefing generation with a local
+gx10 DeepSeek-V4-Flash (DS4) route as fallback.
 """
 
 import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -19,7 +19,7 @@ from pathlib import Path
 import urllib.error
 import urllib.parse
 import urllib.request
-from utils import clamp_timeout, compute_deadline, ensure_venv, time_left
+from utils import call_openai_chat, compute_deadline, ensure_venv, time_left
 
 ensure_venv()
 
@@ -41,11 +41,14 @@ PORTFOLIO_MOVER_MAX = 8
 PORTFOLIO_MOVER_MIN_ABS_CHANGE = 1.0
 MAX_HEADLINES_IN_PROMPT = 10
 TOP_HEADLINES_COUNT = 5
-DEFAULT_LLM_FALLBACK = ["kimi", "gemini"]
-DEFAULT_OLLAMA_KIMI_MODEL = "kimi-k2.6:cloud"
-DEFAULT_AGY_MODEL = "gemini-3.5-flash-medium"
-DEFAULT_KIMI_API_BASE_URL = "https://api.kimi.com/coding/"
-DEFAULT_KIMI_API_MODEL = "k2p5"
+DEFAULT_LLM_FALLBACK = ["qwen", "ds4"]
+# Local tailnet routes for all LLM writing/selection/translation.
+# Qwen (kalliope) is the deterministic default writer/selector/translator;
+# DS4 (gx10 DeepSeek-V4-Flash) is the local fallback writer.
+DEFAULT_QWEN_BASE_URL = "http://100.124.155.99:4000/v1"
+DEFAULT_QWEN_MODEL = "qwen3.6:35b-a3b"
+DEFAULT_DS4_BASE_URL = "http://gx10r-head:8888/v1"
+DEFAULT_DS4_MODEL = "deepseek-v4-flash-dspark"
 HEADLINE_SHORTLIST_SIZE = 20
 HEADLINE_MERGE_THRESHOLD = 0.82
 HEADLINE_MAX_AGE_HOURS = 72
@@ -61,7 +64,7 @@ INTL_TICKER_NAME_OVERRIDES = {
     "8411.T": "Mizuho Financial",
 }
 
-SUPPORTED_MODELS = {"kimi", "gemini"}
+SUPPORTED_MODELS = {"qwen", "ds4"}
 
 # Portfolio prioritization weights
 PORTFOLIO_PRIORITY_WEIGHTS = {
@@ -149,27 +152,27 @@ def parse_model_list(raw: str | None, default: list[str]) -> list[str]:
     return result or default
 
 
-def get_ollama_kimi_model() -> str:
+def get_qwen_base_url() -> str:
+    return (os.getenv("FINANCE_NEWS_QWEN_BASE_URL") or DEFAULT_QWEN_BASE_URL).strip()
+
+
+def get_qwen_model() -> str:
     return (
-        os.getenv("FINANCE_NEWS_OLLAMA_KIMI_MODEL")
-        or os.getenv("OLLAMA_KIMI_MODEL")
-        or DEFAULT_OLLAMA_KIMI_MODEL
+        os.getenv("FINANCE_NEWS_QWEN_MODEL")
+        or os.getenv("QWEN_MODEL")
+        or DEFAULT_QWEN_MODEL
     ).strip()
 
 
-def get_kimi_api_model() -> str:
-    return (
-        os.getenv("FINANCE_NEWS_KIMI_MODEL")
-        or os.getenv("KIMI_MODEL")
-        or DEFAULT_KIMI_API_MODEL
-    ).strip()
+def get_ds4_base_url() -> str:
+    return (os.getenv("FINANCE_NEWS_DS4_BASE_URL") or DEFAULT_DS4_BASE_URL).strip()
 
 
-def get_agy_model(default: str = DEFAULT_AGY_MODEL) -> str:
+def get_ds4_model() -> str:
     return (
-        os.getenv("FINANCE_NEWS_AGY_MODEL")
-        or os.getenv("AGY_MODEL")
-        or default
+        os.getenv("FINANCE_NEWS_DS4_MODEL")
+        or os.getenv("DS4_MODEL")
+        or DEFAULT_DS4_MODEL
     ).strip()
 
 
@@ -517,98 +520,39 @@ def extract_agent_reply(raw: str) -> str:
     return raw.strip()
 
 
-def _run_prompt_command(
-    command: list[str],
-    prompt: str,
-    deadline: float | None,
-    timeout: int,
-    error_label: str,
-    env: dict[str, str] | None = None,
-) -> str:
-    try:
-        proc_timeout = clamp_timeout(timeout, deadline)
-        result = subprocess.run(
-            [*command, prompt],
-            capture_output=True,
-            text=True,
-            timeout=proc_timeout,
-            env={**os.environ, **env} if env else None,
-        )
-    except subprocess.TimeoutExpired:
-        return f"⚠️ {error_label}: timeout"
-    except TimeoutError:
-        return f"⚠️ {error_label}: deadline exceeded"
-    except FileNotFoundError:
-        return f"⚠️ {error_label}: {command[0]} CLI not found"
-    except OSError as exc:
-        return f"⚠️ {error_label}: {exc}"
-
-    if result.returncode == 0:
-        return result.stdout.strip()
-
-    stderr = result.stderr.strip() or "unknown error"
-    return f"⚠️ {error_label}: {stderr}"
+def _briefing_max_tokens() -> int:
+    return int(os.getenv("FINANCE_NEWS_BRIEFING_MAX_TOKENS", "1200"))
 
 
-def _kimi_messages_endpoint() -> str:
-    base_url = (os.getenv("KIMI_API_BASE_URL") or DEFAULT_KIMI_API_BASE_URL).strip()
-    return base_url.rstrip("/") + "/v1/messages"
-
-
-def _run_kimi_api_prompt(prompt: str, deadline: float | None, timeout: int) -> str:
-    api_key = (os.getenv("KIMI_API_KEY") or os.getenv("KIMI_API_KEY_WORK") or "").strip()
+def run_qwen_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
+    """Call the local kalliope Qwen route (OpenAI-compatible)."""
+    api_key = (os.getenv("KALLIOPE_SERVING_API_KEY") or "").strip()
     if not api_key:
-        return "⚠️ Kimi briefing error: KIMI_API_KEY or KIMI_API_KEY_WORK not set"
-
-    payload = {
-        "model": get_kimi_api_model(),
-        "max_tokens": int(os.getenv("FINANCE_NEWS_KIMI_MAX_TOKENS", "1200")),
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        _kimi_messages_endpoint(),
-        data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+        return "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set"
+    return call_openai_chat(
+        prompt,
+        base_url=get_qwen_base_url(),
+        model=get_qwen_model(),
+        api_key=api_key,
+        max_tokens=_briefing_max_tokens(),
+        timeout=timeout,
+        deadline=deadline,
+        error_label="Qwen briefing error",
     )
 
-    try:
-        request_timeout = clamp_timeout(timeout, deadline)
-        with urllib.request.urlopen(req, timeout=request_timeout) as response:
-            response_body = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        error_body = exc.read().decode("utf-8", errors="replace").strip()
-        detail = error_body[:300] if error_body else exc.reason
-        return f"⚠️ Kimi briefing error: HTTP {exc.code}: {detail}"
-    except TimeoutError:
-        return "⚠️ Kimi briefing error: deadline exceeded"
-    except (urllib.error.URLError, OSError) as exc:
-        return f"⚠️ Kimi briefing error: {exc}"
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        return f"⚠️ Kimi briefing error: invalid JSON response: {exc}"
 
-    reply_text = _extract_anthropic_text(response_body)
-    if not reply_text:
-        return "⚠️ Kimi briefing error: empty API response"
-    return reply_text
-
-
-def run_ollama_kimi_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
-    return _run_kimi_api_prompt(prompt, deadline, timeout)
-
-
-def run_agy_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
-    return _run_prompt_command(
-        ["agy", "-p"],
+def run_ds4_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
+    """Call the local gx10 DeepSeek-V4-Flash (DS4) route (OpenAI-compatible)."""
+    api_key = (os.getenv("FINANCE_NEWS_DS4_API_KEY") or "").strip() or None
+    return call_openai_chat(
         prompt,
-        deadline,
-        timeout,
-        "Agy briefing error",
-        env={"AI_MODEL": get_agy_model()},
+        base_url=get_ds4_base_url(),
+        model=get_ds4_model(),
+        api_key=api_key,
+        max_tokens=_briefing_max_tokens(),
+        timeout=timeout,
+        deadline=deadline,
+        error_label="DS4 briefing error",
     )
 
 
@@ -618,14 +562,14 @@ def run_agent_prompt(
     session_id: str = "finance-news-headlines",
     timeout: int = 45,
 ) -> str:
-    """Run a prompt through Ollama Kimi, then Agy CLI if Kimi fails."""
+    """Run a prompt through the local Qwen route, then the local DS4 route on failure."""
     del session_id
-    reply = run_ollama_kimi_prompt(prompt, deadline=deadline, timeout=timeout)
+    reply = run_qwen_prompt(prompt, deadline=deadline, timeout=timeout)
     if not reply.startswith("⚠️"):
         return reply
 
-    print(f"  ↳ {reply}; falling back to agy -p", file=sys.stderr)
-    return run_agy_prompt(prompt, deadline=deadline, timeout=timeout)
+    print(f"  ↳ {reply}; falling back to DS4 route", file=sys.stderr)
+    return run_ds4_prompt(prompt, deadline=deadline, timeout=timeout)
 
 
 def normalize_title(title: str) -> str:
@@ -1144,22 +1088,22 @@ def translate_headlines(
 ) -> tuple[list[str], bool]:
     """Translate headlines to German using LLM.
 
-    Uses local Ollama Kimi first, then Agy CLI.
+    Uses the local Qwen route first, then the local DS4 route.
     Returns (translated_titles, success) or (original_titles, False) on failure.
     """
     if not titles:
         return [], True
 
     print(f"🔤 Translating {len(titles)} headlines...", file=sys.stderr)
-    translated, success = translate_via_ollama_kimi(titles, deadline=deadline)
+    translated, success = translate_via_qwen(titles, deadline=deadline)
     if success:
-        print("  ↳ ✅ Translation successful via Ollama Kimi", file=sys.stderr)
+        print("  ↳ ✅ Translation successful via Qwen", file=sys.stderr)
         return translated, True
 
-    print("  ↳ Ollama Kimi failed, falling back to agy -p", file=sys.stderr)
-    translated, success = translate_via_agy_cli(titles, deadline=deadline)
+    print("  ↳ Qwen failed, falling back to DS4 route", file=sys.stderr)
+    translated, success = translate_via_ds4(titles, deadline=deadline)
     if success:
-        print("  ↳ ✅ Translation successful via Agy CLI", file=sys.stderr)
+        print("  ↳ ✅ Translation successful via DS4", file=sys.stderr)
         return translated, True
 
     return titles, False
@@ -1181,20 +1125,6 @@ def parse_translation_array(raw_text: str) -> list[str] | None:
     if isinstance(data, list) and all(isinstance(item, str) for item in data):
         return data
     return None
-
-
-def _extract_anthropic_text(body: dict) -> str | None:
-    """Extract text content from an Anthropic-compatible API response body."""
-    content = body.get("content", [])
-    if not isinstance(content, list):
-        return None
-    text_parts = [
-        block.get("text", "")
-        for block in content
-        if isinstance(block, dict) and block.get("type") == "text"
-    ]
-    reply_text = "\n".join([p for p in text_parts if isinstance(p, str)]).strip()
-    return reply_text or None
 
 
 def _translate_via_prompt_runner(
@@ -1222,18 +1152,18 @@ def _translate_via_prompt_runner(
     return translated, True
 
 
-def translate_via_ollama_kimi(
+def translate_via_qwen(
     titles: list[str],
     deadline: float | None,
 ) -> tuple[list[str], bool]:
-    return _translate_via_prompt_runner(titles, deadline, run_ollama_kimi_prompt, "Ollama Kimi")
+    return _translate_via_prompt_runner(titles, deadline, run_qwen_prompt, "Qwen")
 
 
-def translate_via_agy_cli(
+def translate_via_ds4(
     titles: list[str],
     deadline: float | None,
 ) -> tuple[list[str], bool]:
-    return _translate_via_prompt_runner(titles, deadline, run_agy_prompt, "Agy CLI")
+    return _translate_via_prompt_runner(titles, deadline, run_ds4_prompt, "DS4")
 
 
 def translate_headline_items(headlines: list[dict], deadline: float | None) -> bool:
@@ -1328,29 +1258,29 @@ Here are the current market items:
 """
 
 
-def summarize_with_kimi(
+def summarize_with_qwen(
     content: str,
     language: str = "de",
     style: str = "briefing",
     deadline: float | None = None,
 ) -> str:
-    """Generate AI summary using Ollama Kimi."""
+    """Generate AI summary using the local Qwen route."""
     prompt = _build_summary_prompt(content, language, style)
-    reply_text = run_ollama_kimi_prompt(prompt, deadline=deadline, timeout=60)
+    reply_text = run_qwen_prompt(prompt, deadline=deadline, timeout=60)
     if reply_text.startswith("⚠️"):
         return reply_text
     return reply_text + format_disclaimer(language)
 
 
-def summarize_with_gemini(
+def summarize_with_ds4(
     content: str,
     language: str = "de",
     style: str = "briefing",
     deadline: float | None = None,
 ) -> str:
-    """Generate AI summary using Agy CLI fallback."""
+    """Generate AI summary using the local DS4 route (fallback writer)."""
     prompt = _build_summary_prompt(content, language, style)
-    reply_text = run_agy_prompt(prompt, deadline=deadline, timeout=60)
+    reply_text = run_ds4_prompt(prompt, deadline=deadline, timeout=60)
     if reply_text.startswith("⚠️"):
         return reply_text
     return reply_text + format_disclaimer(language)
@@ -1900,7 +1830,7 @@ def generate_briefing(args):
     )
 
     # Headline selection uses deterministic ranking first; the LLM path uses
-    # local Ollama Kimi with Agy CLI fallback.
+    # the local Qwen route with a local DS4 route fallback.
 
     shortlist_by_lang = config.get("headline_shortlist_size_by_lang", {})
     shortlist_size = HEADLINE_SHORTLIST_SIZE
@@ -2020,8 +1950,8 @@ def generate_briefing(args):
     else:
         content = raw_content
 
-    model = getattr(args, 'model', "kimi")
-    # Kimi is the active writer for the supported summary styles. The outer
+    model = getattr(args, 'model', "qwen")
+    # Qwen is the active writer for the supported summary styles. The outer
     # caller may still pass --llm, but briefing no longer relies on that flag
     # to enter the AI path.
     use_llm = True
@@ -2067,10 +1997,10 @@ def generate_briefing(args):
         summary_mode = "llm"
         summary_model_used = "llm_failed"
         for candidate in summary_list:
-            if candidate == "kimi":
-                summary = summarize_with_kimi(content, language, args.style, deadline=deadline)
-            elif candidate == "gemini":
-                summary = summarize_with_gemini(content, language, args.style, deadline=deadline)
+            if candidate == "qwen":
+                summary = summarize_with_qwen(content, language, args.style, deadline=deadline)
+            elif candidate == "ds4":
+                summary = summarize_with_ds4(content, language, args.style, deadline=deadline)
             else:
                 summary = f"⚠️ Unsupported summary model: {candidate}"
 
@@ -2091,7 +2021,7 @@ def generate_briefing(args):
             raise RuntimeError(f"Briefing requires LLM writer, got {summary_model_used}")
         summary_structure_ok, summary_missing_sections = validate_briefing_structure(summary, labels)
         if not summary_structure_ok:
-            raise RuntimeError("Kimi briefing missing required sections: " + ", ".join(summary_missing_sections))
+            raise RuntimeError("Briefing missing required sections: " + ", ".join(summary_missing_sections))
 
     if args.debug:
         debug_payload.update({
@@ -2227,9 +2157,9 @@ def main():
                         default=None, help='Briefing type (default: auto)')
     parser.add_argument('--json', action='store_true', help='Output as JSON')
     parser.add_argument('--research', action='store_true', help='Include deep research section (slower)')
-    parser.add_argument('--llm', action='store_true', help='Force LLM summary for non-briefing styles (briefing uses Kimi by default)')
-    parser.add_argument('--model', choices=sorted(SUPPORTED_MODELS), default='kimi',
-                        help='Kimi provider override')
+    parser.add_argument('--llm', action='store_true', help='Force LLM summary for non-briefing styles (briefing uses Qwen by default)')
+    parser.add_argument('--model', choices=sorted(SUPPORTED_MODELS), default='qwen',
+                        help='Local writer route override (qwen or ds4)')
     parser.add_argument('--deadline', type=int, default=None, help='Overall deadline in seconds')
     parser.add_argument('--fast', action='store_true', help='Use fast mode (shorter timeouts, fewer items)')
     parser.add_argument('--debug', action='store_true', help='Write debug log with sources')
