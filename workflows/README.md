@@ -33,7 +33,7 @@ lobster "workflows.run --file workflows/briefing.yaml --args-json '{\"time\":\"e
 | `FINANCE_NEWS_TARGET` | Default target (group name, phone, chat ID) |
 | `KALLIOPE_SERVING_API_KEY` | Bearer token for the local Qwen route (required for briefing generation inside Docker) |
 | `FINANCE_NEWS_QWEN_BASE_URL` | Override the Qwen route base URL (default `http://100.124.155.99:4000/v1`) |
-| `FINANCE_NEWS_QWEN_MODEL` | Override the Qwen model (default `qwen3.6:35b-a3b`) |
+| `FINANCE_NEWS_QWEN_MODEL` | Override the Qwen model (default `qwen3.6:35b-a3b-fast`) |
 | `FINANCE_NEWS_DS4_BASE_URL` | Override the DS4 fallback route base URL (default `http://gx10r-head:8888/v1`) |
 | `FINANCE_NEWS_DS4_MODEL` | Override the DS4 model (default `deepseek-v4-flash-dspark`) |
 | `FINANCE_NEWS_DS4_API_KEY` | Optional bearer token for the DS4 route (unset for the tailnet vLLM) |
