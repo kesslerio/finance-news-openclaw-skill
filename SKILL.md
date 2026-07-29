@@ -47,24 +47,7 @@ See [COMMANDS.md](COMMANDS.md) for the full CLI reference including portfolio ma
 
 ## Cron Jobs
 
-```bash
-# Add morning briefing (6:30 AM PT, weekdays)
-openclaw cron add --schedule "30 6 * * 1-5" \
-  --timezone "America/Los_Angeles" \
-  --command "bash ~/clawd/skills/finance-news/cron/morning.sh"
-
-# Add evening briefing (1:00 PM PT, weekdays)
-openclaw cron add --schedule "0 13 * * 1-5" \
-  --timezone "America/Los_Angeles" \
-  --command "bash ~/clawd/skills/finance-news/cron/evening.sh"
-```
-
-Verify cron jobs are active:
-
-```bash
-openclaw cron list
-bash ~/clawd/skills/finance-news/cron/morning.sh  # Manual test run
-```
+Scheduled morning/evening briefings run via `openclaw cron` — the add/verify commands (and the manual crontab fallback) live in [COMMANDS.md](COMMANDS.md) → Cron Jobs. Quick check: `openclaw cron list`.
 
 ## Integration
 
