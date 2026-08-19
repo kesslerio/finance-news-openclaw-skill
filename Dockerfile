@@ -14,12 +14,13 @@ RUN pip install --no-cache-dir openbb openbb-yfinance
 # Copy application code
 COPY . .
 
-# Local tailnet LLM routes (kalliope Qwen primary, gx10 DS4 fallback).
+# Local tailnet LLM routes (kalliope Qwen primary, john DS4 fallback).
 # The bearer token is injected at runtime via `docker run -e KALLIOPE_SERVING_API_KEY`.
 ENV KALLIOPE_SERVING_API_KEY=
 ENV FINANCE_NEWS_QWEN_BASE_URL=http://100.124.155.99:4000/v1
 ENV FINANCE_NEWS_QWEN_MODEL=qwen3.8:27b-fast
-ENV FINANCE_NEWS_DS4_BASE_URL=http://gx10r-head:8888/v1
+ENV FINANCE_NEWS_DS4_BASE_URL=http://100.120.26.16:8888/v1
+ENV FINANCE_NEWS_DS4_API_KEY=dsv4-local
 ENV FINANCE_NEWS_DS4_MODEL=deepseek-v4-flash-dspark
 ENV FINANCE_NEWS_SUPPRESS_VENV_WARNING=1
 ENV OPENBB_QUOTE_BIN=/app/scripts/openbb-quote

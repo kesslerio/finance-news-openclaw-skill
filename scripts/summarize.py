@@ -47,7 +47,7 @@ DEFAULT_LLM_FALLBACK = ["qwen", "ds4"]
 # DS4 (gx10 DeepSeek-V4-Flash) is the local fallback writer.
 DEFAULT_QWEN_BASE_URL = "http://100.124.155.99:4000/v1"
 DEFAULT_QWEN_MODEL = "qwen3.8:27b-fast"
-DEFAULT_DS4_BASE_URL = "http://gx10r-head:8888/v1"
+DEFAULT_DS4_BASE_URL = "http://100.120.26.16:8888/v1"
 DEFAULT_DS4_MODEL = "deepseek-v4-flash-dspark"
 HEADLINE_SHORTLIST_SIZE = 20
 HEADLINE_MERGE_THRESHOLD = 0.82
