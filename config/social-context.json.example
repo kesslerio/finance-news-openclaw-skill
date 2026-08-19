@@ -1,0 +1,18 @@
+{
+  "items": [
+    {
+      "source": "TweetClaw search tweets",
+      "title": "NVDA demand chatter",
+      "text": "Reviewed public posts mention Blackwell supply updates and data center demand.",
+      "url": "https://x.com/search?q=NVDA%20Blackwell",
+      "timestamp": "2026-05-28T08:00:00Z"
+    },
+    {
+      "source": "Analyst note",
+      "title": "Fed path discussion",
+      "text": "Rate-cut expectations stayed mixed before the next inflation print.",
+      "url": "",
+      "timestamp": ""
+    }
+  ]
+}
