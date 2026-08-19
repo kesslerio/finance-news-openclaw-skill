@@ -87,6 +87,7 @@ def call_openai_chat(
     deadline: float | None = None,
     error_label: str = "LLM error",
     temperature: float = 0.0,
+    reasoning_effort: str | None = None,
 ) -> str:
     """Call an OpenAI-compatible ``/chat/completions`` endpoint with a single user
     message and return the assistant text.
@@ -95,6 +96,9 @@ def call_openai_chat(
     On any transport, HTTP, or decoding failure it returns a
     ``"⚠️ {error_label}: ..."`` sentinel so callers can fall back or degrade
     gracefully, matching the existing prompt-runner contract.
+
+    ``reasoning_effort`` is forwarded to servers that support it (e.g. kalliope
+    Qwen3.x reasoning models). Ignored by servers that don't recognize it.
     """
     endpoint = base_url.rstrip("/") + "/chat/completions"
     payload = {
@@ -103,6 +107,8 @@ def call_openai_chat(
         "temperature": temperature,
         "messages": [{"role": "user", "content": prompt}],
     }
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
