@@ -25,7 +25,7 @@ OUTPUT_DIR = SCRIPT_DIR.parent / "research"
 DEFAULT_DS4_BASE_URL = "http://gx10r-head:8888/v1"
 DEFAULT_DS4_MODEL = "deepseek-v4-flash-dspark"
 DEFAULT_QWEN_BASE_URL = "http://100.124.155.99:4000/v1"
-DEFAULT_QWEN_MODEL = "qwen3.6:35b-a3b-fast"
+DEFAULT_QWEN_MODEL = "qwen3.8:27b-fast"
 RESEARCH_MAX_TOKENS = int(os.getenv("FINANCE_NEWS_RESEARCH_MAX_TOKENS", "2048"))
 RESEARCH_TIMEOUT = int(os.getenv("FINANCE_NEWS_RESEARCH_TIMEOUT", "120"))
 
@@ -183,6 +183,7 @@ def research_with_qwen(content: str, focus_areas: list | None = None) -> str:
         max_tokens=RESEARCH_MAX_TOKENS,
         timeout=RESEARCH_TIMEOUT,
         error_label="Qwen research error",
+        reasoning_effort=os.getenv("FINANCE_NEWS_QWEN_REASONING_EFFORT") or None,
     )
 
 
