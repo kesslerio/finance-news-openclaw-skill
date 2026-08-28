@@ -23,7 +23,7 @@ OUTPUT_DIR = SCRIPT_DIR.parent / "research"
 # Deep research is a genuinely complex / materiality task -> DS4-high primary,
 # local Qwen fallback. Both are OpenAI-compatible tailnet routes.
 DEFAULT_DS4_BASE_URL = "http://100.120.26.16:8888/v1"
-DEFAULT_DS4_MODEL = "deepseek-v4-flash-dspark"
+DEFAULT_DS4_MODEL = "deepseek-v4-flash-0731"
 DEFAULT_QWEN_BASE_URL = "http://100.124.155.99:4000/v1"
 DEFAULT_QWEN_MODEL = "qwen3.8:27b-fast"
 RESEARCH_MAX_TOKENS = int(os.getenv("FINANCE_NEWS_RESEARCH_MAX_TOKENS", "2048"))
