@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from datetime import datetime
 
+import pytest
 import summarize
 from summarize import (
     MoverContext,
