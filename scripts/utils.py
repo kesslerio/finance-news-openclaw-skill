@@ -92,13 +92,13 @@ def call_openai_chat(
     """Call an OpenAI-compatible ``/chat/completions`` endpoint with a single user
     message and return the assistant text.
 
-    Used to reach the local tailnet routes (kalliope Qwen, gx10 DeepSeek-V4-Flash).
+    Used to reach the local tailnet routes (Kalliope Ornith and manual DS4).
     On any transport, HTTP, or decoding failure it returns a
     ``"⚠️ {error_label}: ..."`` sentinel so callers can fall back or degrade
     gracefully, matching the existing prompt-runner contract.
 
-    ``reasoning_effort`` is forwarded to servers that support it (e.g. kalliope
-    Qwen3.x reasoning models). Ignored by servers that don't recognize it.
+    ``reasoning_effort`` is forwarded to servers that support it. It is ignored
+    by servers that do not recognize it.
     """
     endpoint = base_url.rstrip("/") + "/chat/completions"
     payload = {

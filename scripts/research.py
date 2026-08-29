@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Research Module - Deep research using the local gx10 DeepSeek-V4-Flash (DS4)
-route, with the local kalliope Qwen route as fallback.
+Research Module - Manual deep research using the local DeepSeek-V4-Flash
+(DS4) route, with local Kalliope Ornith as fallback.
 Crawls articles, finds correlations, researches companies.
 Outputs research_report.md for later analysis.
 """
@@ -21,11 +21,11 @@ SCRIPT_DIR = Path(__file__).parent
 CONFIG_DIR = SCRIPT_DIR.parent / "config"
 OUTPUT_DIR = SCRIPT_DIR.parent / "research"
 # Deep research is a genuinely complex / materiality task -> DS4-high primary,
-# local Qwen fallback. Both are OpenAI-compatible tailnet routes.
+# local Ornith fallback. Both are OpenAI-compatible tailnet routes.
 DEFAULT_DS4_BASE_URL = "http://100.120.26.16:8888/v1"
-DEFAULT_DS4_MODEL = "deepseek-v4-flash-dspark"
-DEFAULT_QWEN_BASE_URL = "http://100.124.155.99:4000/v1"
-DEFAULT_QWEN_MODEL = "qwen3.8:27b-fast"
+DEFAULT_DS4_MODEL = "deepseek-v4-flash-0731"
+DEFAULT_ORNITH_BASE_URL = "http://100.124.155.99:4000/v1"
+DEFAULT_ORNITH_MODEL = "ornith-1.5:35b-medium"
 RESEARCH_MAX_TOKENS = int(os.getenv("FINANCE_NEWS_RESEARCH_MAX_TOKENS", "2048"))
 RESEARCH_TIMEOUT = int(os.getenv("FINANCE_NEWS_RESEARCH_TIMEOUT", "120"))
 
@@ -99,16 +99,24 @@ def get_ds4_model() -> str:
     ).strip()
 
 
-def get_qwen_base_url() -> str:
-    return (os.getenv("FINANCE_NEWS_QWEN_BASE_URL") or DEFAULT_QWEN_BASE_URL).strip()
-
-
-def get_qwen_model() -> str:
+def get_ornith_base_url() -> str:
     return (
-        os.getenv("FINANCE_NEWS_QWEN_MODEL")
-        or os.getenv("QWEN_MODEL")
-        or DEFAULT_QWEN_MODEL
+        os.getenv("FINANCE_NEWS_ORNITH_BASE_URL")
+        or os.getenv("FINANCE_NEWS_QWEN_BASE_URL")
+        or DEFAULT_ORNITH_BASE_URL
     ).strip()
+
+
+def get_ornith_model() -> str:
+    model = (
+        os.getenv("FINANCE_NEWS_ORNITH_MODEL")
+        or os.getenv("FINANCE_NEWS_QWEN_MODEL")
+        or os.getenv("QWEN_MODEL")
+        or DEFAULT_ORNITH_MODEL
+    ).strip()
+    if not model.startswith("ornith-1.5:"):
+        raise ValueError(f"Ornith fallback rejected model override: {model}")
+    return model
 
 
 def build_research_prompt(content: str, focus_areas: list | None = None) -> str:
@@ -169,21 +177,29 @@ def research_with_ds4(content: str, focus_areas: list | None = None) -> str:
     )
 
 
-def research_with_qwen(content: str, focus_areas: list | None = None) -> str:
-    """Perform deep research using the local Qwen route (fallback)."""
+def research_with_ornith(content: str, focus_areas: list | None = None) -> str:
+    """Perform deep research using the local Ornith fallback route."""
     prompt = build_research_prompt(content, focus_areas)
     api_key = (os.getenv("KALLIOPE_SERVING_API_KEY") or "").strip()
     if not api_key:
-        return "⚠️ Qwen research error: KALLIOPE_SERVING_API_KEY not set"
+        return "⚠️ Ornith research error: KALLIOPE_SERVING_API_KEY not set"
+    try:
+        model = get_ornith_model()
+    except ValueError as exc:
+        return f"⚠️ Ornith research error: {exc}"
     return call_openai_chat(
         prompt,
-        base_url=get_qwen_base_url(),
-        model=get_qwen_model(),
+        base_url=get_ornith_base_url(),
+        model=model,
         api_key=api_key,
         max_tokens=RESEARCH_MAX_TOKENS,
         timeout=RESEARCH_TIMEOUT,
-        error_label="Qwen research error",
-        reasoning_effort=os.getenv("FINANCE_NEWS_QWEN_REASONING_EFFORT") or None,
+        error_label="Ornith research error",
+        reasoning_effort=(
+            os.getenv("FINANCE_NEWS_ORNITH_REASONING_EFFORT")
+            or os.getenv("FINANCE_NEWS_QWEN_REASONING_EFFORT")
+            or None
+        ),
     )
 
 
@@ -211,12 +227,12 @@ def generate_research_content(market_data: dict, portfolio_data: dict, focus_are
             'report': report,
             'source': 'ds4'
         }
-    print(f"  ↳ {report}; falling back to Qwen route", file=sys.stderr)
-    report = research_with_qwen(raw_report, focus_areas)
+    print(f"  ↳ {report}; falling back to Ornith route", file=sys.stderr)
+    report = research_with_ornith(raw_report, focus_areas)
     if not report.startswith("⚠️"):
         return {
             'report': report,
-            'source': 'qwen'
+            'source': 'ornith'
         }
     print(f"  ↳ {report}; using raw data report", file=sys.stderr)
     return {
@@ -269,8 +285,8 @@ def generate_research_report(args):
 
     if source == 'ds4':
         print("🔬 Running deep research with DS4-high route...", file=sys.stderr)
-    elif source == 'qwen':
-        print("🔬 Running deep research with Qwen route...", file=sys.stderr)
+    elif source == 'ornith':
+        print("🔬 Running deep research with Ornith route...", file=sys.stderr)
     else:
         print("🧾 LLM research unavailable; using raw data report", file=sys.stderr)
     

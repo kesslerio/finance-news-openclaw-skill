@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-"""Translate portfolio headlines in briefing JSON using openclaw.
+"""Translate portfolio headlines in briefing JSON using Kalliope Ornith.
 
 Usage: python3 translate_portfolio.py /path/to/briefing.json [--lang de]
 
-Reads briefing JSON, translates portfolio article headlines via openclaw,
+Reads briefing JSON, translates portfolio article headlines via Ornith,
 writes back the modified JSON.
 """
 
 import argparse
 import json
+import os
 import re
-import subprocess
 import sys
+
+from utils import call_openai_chat
+
+
+DEFAULT_ORNITH_BASE_URL = "http://100.124.155.99:4000/v1"
+DEFAULT_ORNITH_MODEL = "ornith-1.5:35b-medium"
 
 
 def extract_headlines(portfolio_message: str) -> list[str]:
@@ -32,11 +38,11 @@ def extract_headlines(portfolio_message: str) -> list[str]:
 
 
 def translate_headlines(headlines: list[str], lang: str = "de") -> list[str]:
-    """Translate headlines using openclaw agent."""
+    """Translate headlines directly through the scheduled Ornith route."""
     if not headlines:
         return []
 
-    prompt = f"""Translate these English headlines to German.
+    prompt = """Translate these English headlines to German.
 Return ONLY a JSON array of strings in the same order.
 Example: ["Übersetzung 1", "Übersetzung 2"]
 Do not add commentary.
@@ -46,44 +52,36 @@ Headlines:
     for idx, title in enumerate(headlines, start=1):
         prompt += f"{idx}. {title}\n"
 
-    try:
-        result = subprocess.run(
-            [
-                'openclaw', 'agent',
-                '--session-id', 'finance-news-translate-portfolio',
-                '--message', prompt,
-                '--json',
-                '--timeout', '60'
-            ],
-            capture_output=True,
-            text=True,
-            timeout=90
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        print(f"⚠️ Translation failed: {e}", file=sys.stderr)
+    api_key = (os.getenv("KALLIOPE_SERVING_API_KEY") or "").strip()
+    if not api_key:
+        print("⚠️ Translation failed: KALLIOPE_SERVING_API_KEY not set", file=sys.stderr)
         return headlines
 
-    if result.returncode != 0:
-        print(f"⚠️ openclaw error: {result.stderr}", file=sys.stderr)
+    model = (
+        os.getenv("FINANCE_NEWS_ORNITH_MODEL")
+        or os.getenv("FINANCE_NEWS_QWEN_MODEL")
+        or DEFAULT_ORNITH_MODEL
+    ).strip()
+    if not model.startswith("ornith-1.5:"):
+        print(f"⚠️ Translation rejected non-Ornith model override: {model}", file=sys.stderr)
         return headlines
 
-    # Extract reply from openclaw JSON output
-    # Format: {"result": {"payloads": [{"text": "..."}]}}
-    # Note: openclaw may print plugin loading messages before JSON, so find the JSON start
-    stdout = result.stdout
-    json_start = stdout.find('{')
-    if json_start > 0:
-        stdout = stdout[json_start:]
-
-    try:
-        output = json.loads(stdout)
-        payloads = output.get('result', {}).get('payloads', [])
-        if payloads and payloads[0].get('text'):
-            reply = payloads[0]['text']
-        else:
-            reply = output.get('reply', '') or output.get('message', '') or stdout
-    except json.JSONDecodeError:
-        reply = stdout
+    reply = call_openai_chat(
+        prompt,
+        base_url=(
+            os.getenv("FINANCE_NEWS_ORNITH_BASE_URL")
+            or os.getenv("FINANCE_NEWS_QWEN_BASE_URL")
+            or DEFAULT_ORNITH_BASE_URL
+        ).strip(),
+        model=model,
+        api_key=api_key,
+        max_tokens=600,
+        timeout=60,
+        error_label="Ornith translation error",
+    )
+    if reply.startswith("⚠️"):
+        print(f"⚠️ Translation failed: {reply}", file=sys.stderr)
+        return headlines
 
     # Parse JSON array from reply
     json_text = reply.strip()
@@ -100,7 +98,7 @@ Headlines:
     except json.JSONDecodeError as e:
         print(f"⚠️ JSON parse error: {e}", file=sys.stderr)
 
-    print(f"⚠️ Translation failed, using original headlines", file=sys.stderr)
+    print("⚠️ Translation failed, using original headlines", file=sys.stderr)
     return headlines
 
 

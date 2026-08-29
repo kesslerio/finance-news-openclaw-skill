@@ -2,8 +2,8 @@
 
 > **SUPERSEDED (2026-07-22).** This document is retained only as historical rationale
 > for the earlier direct-writer migration. The Kimi/Ollama-Cloud writer described below
-> has since been replaced by the local tailnet routes (kalliope Qwen primary; gx10
-> DeepSeek-V4-Flash fallback; deep research on DS4-high) for the Ollama Cloud pause.
+> has since been replaced by Kalliope Ornith for scheduled briefings. Other
+> local routes are manual-only; explicit deep research still uses DS4-high.
 > The "call the writer directly from the skill" seam still holds; only the model routes
 > changed. See `README.md` for the current routing.
 

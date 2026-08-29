@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from datetime import datetime
 
+import pytest
 import summarize
 from summarize import (
     MoverContext,
@@ -73,7 +74,7 @@ def test_format_market_data_handles_non_numeric_change_percent():
     assert "- Nasdaq: 22450 (N/A)" in result
 
 
-def test_run_qwen_prompt_calls_qwen_api(monkeypatch):
+def test_run_ornith_prompt_calls_ornith_api(monkeypatch):
     import utils
 
     captured = {}
@@ -83,29 +84,45 @@ def test_run_qwen_prompt_calls_qwen_api(monkeypatch):
         captured["timeout"] = timeout
         captured["headers"] = dict(req.header_items())
         captured["payload"] = json.loads(req.data.decode("utf-8"))
-        return _FakeUrlopenResponse({"choices": [{"message": {"content": "Qwen response"}}]})
+        return _FakeUrlopenResponse({"choices": [{"message": {"content": "Ornith response"}}]})
 
     monkeypatch.setenv("KALLIOPE_SERVING_API_KEY", "test-key")
-    monkeypatch.setenv("FINANCE_NEWS_QWEN_BASE_URL", "http://qwen.test/v1")
-    monkeypatch.setenv("FINANCE_NEWS_QWEN_MODEL", "qwen-test")
+    monkeypatch.setenv("FINANCE_NEWS_ORNITH_BASE_URL", "http://ornith.test/v1")
+    monkeypatch.setenv("FINANCE_NEWS_ORNITH_MODEL", "ornith-1.5:test")
     monkeypatch.setattr(utils.urllib.request, "urlopen", fake_urlopen)
 
-    result = summarize.run_qwen_prompt("Write a briefing", deadline=None, timeout=45)
+    result = summarize.run_ornith_prompt("Write a briefing", deadline=None, timeout=45)
 
-    assert result == "Qwen response"
-    assert captured["url"] == "http://qwen.test/v1/chat/completions"
+    assert result == "Ornith response"
+    assert captured["url"] == "http://ornith.test/v1/chat/completions"
     assert captured["timeout"] == 45
     assert captured["headers"]["Authorization"] == "Bearer test-key"
-    assert captured["payload"]["model"] == "qwen-test"
+    assert captured["payload"]["model"] == "ornith-1.5:test"
     assert captured["payload"]["messages"] == [{"role": "user", "content": "Write a briefing"}]
 
 
-def test_run_qwen_prompt_requires_api_key(monkeypatch):
+def test_run_ornith_prompt_requires_api_key(monkeypatch):
     monkeypatch.delenv("KALLIOPE_SERVING_API_KEY", raising=False)
 
-    result = summarize.run_qwen_prompt("Write a briefing", deadline=None, timeout=45)
+    result = summarize.run_ornith_prompt("Write a briefing", deadline=None, timeout=45)
 
-    assert result == "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set"
+    assert result == "⚠️ Ornith briefing error: KALLIOPE_SERVING_API_KEY not set"
+
+
+def test_run_ornith_prompt_rejects_non_ornith_model_before_network(monkeypatch):
+    import utils
+
+    monkeypatch.setenv("KALLIOPE_SERVING_API_KEY", "test-key")
+    monkeypatch.setenv("FINANCE_NEWS_ORNITH_MODEL", "qwen3.8:27b-fast")
+    monkeypatch.setattr(
+        utils.urllib.request,
+        "urlopen",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("network must not be called")),
+    )
+
+    result = summarize.run_ornith_prompt("Write a briefing")
+
+    assert "rejected model override" in result
 
 
 def test_run_ds4_prompt_calls_ds4_api_without_key(monkeypatch):
@@ -171,27 +188,33 @@ def test_format_whatsapp_message_replaces_markdown_headings_and_bold():
     ]
 
 
-def test_translate_via_qwen_parses_markdown_json(monkeypatch):
+def test_scheduled_model_defaults_are_ornith_only():
+    assert summarize.DEFAULT_ORNITH_MODEL == "ornith-1.5:35b-medium"
+    assert summarize.normalize_writer_route(None) == "ornith"
+    assert summarize.normalize_writer_route("qwen") == "ornith"
+
+
+def test_translate_via_ornith_parses_markdown_json(monkeypatch):
     monkeypatch.setattr(
         summarize,
-        "run_qwen_prompt",
+        "run_ornith_prompt",
         lambda *_a, **_k: "```json\n[\"Titel A\", \"Titel B\"]\n```",
     )
 
-    translated, success = summarize.translate_via_qwen(["Title A", "Title B"], deadline=None)
+    translated, success = summarize.translate_via_ornith(["Title A", "Title B"], deadline=None)
     assert success is True
     assert translated == ["Titel A", "Titel B"]
 
 
-def test_translate_headlines_uses_qwen_first(monkeypatch):
+def test_translate_headlines_uses_ornith(monkeypatch):
     monkeypatch.setattr(
         summarize,
-        "translate_via_qwen",
+        "translate_via_ornith",
         lambda titles, deadline: (["Titel"], True),
     )
 
     def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("DS4 fallback should not be called when Qwen succeeds")
+        raise AssertionError("DS4 must not be called when Ornith succeeds")
 
     monkeypatch.setattr(summarize, "translate_via_ds4", fail_if_called)
 
@@ -200,42 +223,45 @@ def test_translate_headlines_uses_qwen_first(monkeypatch):
     assert translated == ["Titel"]
 
 
-def test_translate_headlines_falls_back_to_ds4(monkeypatch):
+def test_translate_headlines_does_not_fall_back_to_ds4(monkeypatch):
     monkeypatch.setattr(
         summarize,
-        "translate_via_qwen",
+        "translate_via_ornith",
         lambda titles, deadline: (titles, False),
     )
-    monkeypatch.setattr(summarize, "translate_via_ds4", lambda titles, deadline: (["Titel"], True))
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("scheduled translation must not call DS4")
+
+    monkeypatch.setattr(summarize, "translate_via_ds4", fail_if_called)
 
     translated, success = summarize.translate_headlines(["Title"], deadline=None)
-    assert success is True
-    assert translated == ["Titel"]
+    assert success is False
+    assert translated == ["Title"]
 
 
-def test_translate_via_qwen_timeout(monkeypatch):
+def test_translate_via_ornith_timeout(monkeypatch):
     """Falls back on timeout."""
-    monkeypatch.setattr(summarize, "run_qwen_prompt", lambda *_a, **_k: "⚠️ Qwen briefing error: timeout")
+    monkeypatch.setattr(summarize, "run_ornith_prompt", lambda *_a, **_k: "⚠️ Ornith briefing error: timeout")
 
-    translated, success = summarize.translate_via_qwen(["Title"], deadline=None)
+    translated, success = summarize.translate_via_ornith(["Title"], deadline=None)
     assert success is False
     assert translated == ["Title"]
 
 
-def test_translate_via_qwen_malformed_json(monkeypatch):
+def test_translate_via_ornith_malformed_json(monkeypatch):
     """Falls back when provider returns non-JSON."""
-    monkeypatch.setattr(summarize, "run_qwen_prompt", lambda *_a, **_k: "not json at all")
+    monkeypatch.setattr(summarize, "run_ornith_prompt", lambda *_a, **_k: "not json at all")
 
-    translated, success = summarize.translate_via_qwen(["Title"], deadline=None)
+    translated, success = summarize.translate_via_ornith(["Title"], deadline=None)
     assert success is False
     assert translated == ["Title"]
 
 
-def test_translate_via_qwen_length_mismatch(monkeypatch):
+def test_translate_via_ornith_length_mismatch(monkeypatch):
     """Falls back when API returns wrong number of translations."""
-    monkeypatch.setattr(summarize, "run_qwen_prompt", lambda *_a, **_k: '["Only One"]')
+    monkeypatch.setattr(summarize, "run_ornith_prompt", lambda *_a, **_k: '["Only One"]')
 
-    translated, success = summarize.translate_via_qwen(
+    translated, success = summarize.translate_via_ornith(
         ["Title A", "Title B", "Title C"], deadline=None,
     )
     assert success is False
@@ -249,9 +275,9 @@ def test_translate_via_ds4_success(monkeypatch):
     assert translated == ["Titel"]
 
 
-def test_translate_via_qwen_empty_list():
+def test_translate_via_ornith_empty_list():
     """Returns empty list for empty input."""
-    translated, success = summarize.translate_via_qwen([], deadline=None)
+    translated, success = summarize.translate_via_ornith([], deadline=None)
     assert success is True
     assert translated == []
 
@@ -628,7 +654,7 @@ Beobachten.
     monkeypatch.setattr(summarize, "get_market_news", fake_market_news)
     monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
-    monkeypatch.setattr(summarize, "summarize_with_qwen", fake_summary)
+    monkeypatch.setattr(summarize, "summarize_with_ornith", fake_summary)
     monkeypatch.setattr(summarize, "validate_briefing_structure", lambda *_a, **_k: (True, []))
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
 
@@ -639,7 +665,7 @@ Beobachten.
             "lang": "de",
             "style": "briefing",
             "time": None,
-            "model": "qwen",
+            "model": "ornith",
             "json": False,
             "research": False,
             "deadline": None,
@@ -654,7 +680,7 @@ Beobachten.
     assert "Börsen Abend-Briefing" in stdout
 
 
-def test_summarize_with_qwen_uses_localized_briefing_headings(monkeypatch):
+def test_summarize_with_ornith_uses_localized_briefing_headings(monkeypatch):
     captured = {}
 
     def fake_runner(prompt, deadline=None, timeout=60):
@@ -662,40 +688,40 @@ def test_summarize_with_qwen_uses_localized_briefing_headings(monkeypatch):
         captured["timeout"] = timeout
         return "### Märkte\n\nAlles ruhig."
 
-    monkeypatch.setattr(summarize, "run_qwen_prompt", fake_runner)
+    monkeypatch.setattr(summarize, "run_ornith_prompt", fake_runner)
 
-    summary = summarize.summarize_with_qwen("Raw content", language="de", style="briefing", deadline=None)
+    summary = summarize.summarize_with_ornith("Raw content", language="de", style="briefing", deadline=None)
     prompt = captured["prompt"]
     assert "### Märkte" in prompt
     assert "### Sentiment" not in prompt
     assert summary.startswith("### Märkte")
 
 
-def test_summarize_with_qwen_success(monkeypatch):
+def test_summarize_with_ornith_success(monkeypatch):
     captured = {}
 
     def fake_runner(prompt, deadline=None, timeout=60):
         captured["prompt"] = prompt
         captured["timeout"] = timeout
-        return "## Market Briefing\n\nQwen summary body"
+        return "## Market Briefing\n\nOrnith summary body"
 
-    monkeypatch.setattr(summarize, "run_qwen_prompt", fake_runner)
+    monkeypatch.setattr(summarize, "run_ornith_prompt", fake_runner)
 
-    summary = summarize.summarize_with_qwen("Raw content", language="en", style="briefing", deadline=None)
-    assert "Qwen summary body" in summary
+    summary = summarize.summarize_with_ornith("Raw content", language="en", style="briefing", deadline=None)
+    assert "Ornith summary body" in summary
     assert "informational purposes only" in summary
     assert "Raw content" in captured["prompt"]
     assert captured["timeout"] == 60
 
 
-def test_summarize_with_qwen_error_passthrough(monkeypatch):
+def test_summarize_with_ornith_error_passthrough(monkeypatch):
     monkeypatch.setattr(
         summarize,
-        "run_qwen_prompt",
-        lambda *_a, **_k: "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set",
+        "run_ornith_prompt",
+        lambda *_a, **_k: "⚠️ Ornith briefing error: KALLIOPE_SERVING_API_KEY not set",
     )
-    summary = summarize.summarize_with_qwen("Raw content", language="en", style="briefing", deadline=None)
-    assert summary == "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set"
+    summary = summarize.summarize_with_ornith("Raw content", language="en", style="briefing", deadline=None)
+    assert summary == "⚠️ Ornith briefing error: KALLIOPE_SERVING_API_KEY not set"
 
 
 def test_summarize_with_ds4_success(monkeypatch):
@@ -718,7 +744,7 @@ def test_generate_briefing_zero_deadline_disables_timeout(capsys, monkeypatch):
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
     monkeypatch.setattr(
         summarize,
-        "summarize_with_qwen",
+        "summarize_with_ornith",
         lambda *_a, **_k: (
             "### Märkte\nAlles ruhig.\n\n"
             "### Stimmung\nNeutral.\n\n"
@@ -735,7 +761,7 @@ def test_generate_briefing_zero_deadline_disables_timeout(capsys, monkeypatch):
             "lang": "de",
             "style": "briefing",
             "time": None,
-            "model": "qwen",
+            "model": "ornith",
             "json": True,
             "research": False,
             "deadline": 0.0,
@@ -748,10 +774,10 @@ def test_generate_briefing_zero_deadline_disables_timeout(capsys, monkeypatch):
     summarize.generate_briefing(args)
     payload = json.loads(capsys.readouterr().out)
     assert payload["summary_mode"] == "llm"
-    assert payload["summary_model_used"] == "qwen"
+    assert payload["summary_model_used"] == "ornith"
 
 
-def test_generate_briefing_falls_back_to_ds4_when_qwen_unavailable(capsys, monkeypatch):
+def test_generate_briefing_does_not_fall_back_to_ds4(monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [
@@ -773,18 +799,12 @@ def test_generate_briefing_falls_back_to_ds4_when_qwen_unavailable(capsys, monke
     monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
-    monkeypatch.setattr(summarize, "summarize_with_qwen", lambda *_a, **_k: "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set")
-    monkeypatch.setattr(
-        summarize,
-        "summarize_with_ds4",
-        lambda *_a, **_k: (
-            "### Markets\nQuiet.\n\n"
-            "### Sentiment\nNeutral.\n\n"
-            "### Top 5 Headlines\n1. Headline one\n\n"
-            "### Portfolio Impact\nNone.\n\n"
-            "### Watchpoints\n- Watch one"
-        ),
-    )
+    monkeypatch.setattr(summarize, "summarize_with_ornith", lambda *_a, **_k: "⚠️ Ornith briefing error: KALLIOPE_SERVING_API_KEY not set")
+
+    def fail_if_ds4_called(*_args, **_kwargs):
+        raise AssertionError("scheduled briefing must not call DS4")
+
+    monkeypatch.setattr(summarize, "summarize_with_ds4", fail_if_ds4_called)
 
     args = type(
         "Args",
@@ -793,7 +813,7 @@ def test_generate_briefing_falls_back_to_ds4_when_qwen_unavailable(capsys, monke
             "lang": "en",
             "style": "briefing",
             "time": None,
-            "model": "qwen",
+            "model": "ornith",
             "json": True,
             "research": False,
             "deadline": None,
@@ -803,13 +823,11 @@ def test_generate_briefing_falls_back_to_ds4_when_qwen_unavailable(capsys, monke
         },
     )()
 
-    summarize.generate_briefing(args)
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["summary_model_used"] == "ds4"
-    assert "### Markets" in payload["summary"]
+    with pytest.raises(RuntimeError, match="KALLIOPE_SERVING_API_KEY"):
+        summarize.generate_briefing(args)
 
 
-def test_generate_analysis_falls_back_to_ds4_when_qwen_unavailable(monkeypatch, capsys):
+def test_generate_analysis_does_not_fall_back_to_ds4(monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [
@@ -829,8 +847,12 @@ def test_generate_analysis_falls_back_to_ds4_when_qwen_unavailable(monkeypatch, 
     monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
-    monkeypatch.setattr(summarize, "summarize_with_qwen", lambda *_a, **_k: "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set")
-    monkeypatch.setattr(summarize, "summarize_with_ds4", lambda *_a, **_k: "## Analysis\n\nDS4 analysis body")
+    monkeypatch.setattr(summarize, "summarize_with_ornith", lambda *_a, **_k: "⚠️ Ornith briefing error: KALLIOPE_SERVING_API_KEY not set")
+
+    def fail_if_ds4_called(*_args, **_kwargs):
+        raise AssertionError("scheduled analysis must not call DS4")
+
+    monkeypatch.setattr(summarize, "summarize_with_ds4", fail_if_ds4_called)
 
     args = type(
         "Args",
@@ -839,7 +861,7 @@ def test_generate_analysis_falls_back_to_ds4_when_qwen_unavailable(monkeypatch, 
             "lang": "en",
             "style": "analysis",
             "time": None,
-            "model": "qwen",
+            "model": "ornith",
             "json": True,
             "research": False,
             "deadline": None,
@@ -849,13 +871,11 @@ def test_generate_analysis_falls_back_to_ds4_when_qwen_unavailable(monkeypatch, 
         },
     )()
 
-    summarize.generate_briefing(args)
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["summary_model_used"] == "ds4"
-    assert "DS4 analysis body" in payload["summary"]
+    with pytest.raises(RuntimeError, match="KALLIOPE_SERVING_API_KEY"):
+        summarize.generate_briefing(args)
 
 
-def test_generate_analysis_uses_qwen_even_without_llm_flag(capsys, monkeypatch):
+def test_generate_analysis_uses_ornith_even_without_llm_flag(capsys, monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [
@@ -879,11 +899,11 @@ def test_generate_analysis_uses_qwen_even_without_llm_flag(capsys, monkeypatch):
 
     calls = {}
 
-    def fake_qwen(content, language, style, deadline=None):
+    def fake_ornith(content, language, style, deadline=None):
         calls["style"] = style
-        return "## Analysis\n\nQwen analysis body"
+        return "## Analysis\n\nOrnith analysis body"
 
-    monkeypatch.setattr(summarize, "summarize_with_qwen", fake_qwen)
+    monkeypatch.setattr(summarize, "summarize_with_ornith", fake_ornith)
 
     args = type(
         "Args",
@@ -892,7 +912,7 @@ def test_generate_analysis_uses_qwen_even_without_llm_flag(capsys, monkeypatch):
             "lang": "en",
             "style": "analysis",
             "time": None,
-            "model": "qwen",
+            "model": "ornith",
             "json": True,
             "research": False,
             "deadline": None,
@@ -906,8 +926,8 @@ def test_generate_analysis_uses_qwen_even_without_llm_flag(capsys, monkeypatch):
     payload = json.loads(capsys.readouterr().out)
     assert calls["style"] == "analysis"
     assert payload["summary_mode"] == "llm"
-    assert payload["summary_model_used"] == "qwen"
-    assert "Qwen analysis body" in payload["summary"]
+    assert payload["summary_model_used"] == "ornith"
+    assert "Ornith analysis body" in payload["summary"]
 
 
 # --- Tests for watchpoints feature (Issue #92) ---
@@ -1209,7 +1229,7 @@ class TestBuildWatchpointsData:
         assert result.market_wide is True
 
 
-def test_generate_briefing_defaults_to_qwen_path(capsys, monkeypatch):
+def test_generate_briefing_defaults_to_ornith_path(capsys, monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [{"source": "CNBC", "title": "Headline one", "link": "https://example.com/1"}],
@@ -1221,7 +1241,7 @@ def test_generate_briefing_defaults_to_qwen_path(capsys, monkeypatch):
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
     monkeypatch.setattr(summarize, "validate_briefing_structure", lambda *_a, **_k: (True, []))
-    monkeypatch.setattr(summarize, "summarize_with_qwen", lambda *_a, **_k: "### Märkte\n\nAlles ruhig.\n\n### Stimmung\n\nNeutral.\n\n### Top 5 Schlagzeilen\n1. Headline one\n\n### Portfolio-Auswirkung\nBeobachten.\n\n### Beobachtungspunkte\n- Watch one")
+    monkeypatch.setattr(summarize, "summarize_with_ornith", lambda *_a, **_k: "### Märkte\n\nAlles ruhig.\n\n### Stimmung\n\nNeutral.\n\n### Top 5 Schlagzeilen\n1. Headline one\n\n### Portfolio-Auswirkung\nBeobachten.\n\n### Beobachtungspunkte\n- Watch one")
 
     args = type(
         "Args",
@@ -1230,7 +1250,7 @@ def test_generate_briefing_defaults_to_qwen_path(capsys, monkeypatch):
             "lang": "de",
             "style": "briefing",
             "time": None,
-            "model": "qwen",
+            "model": "ornith",
             "json": True,
             "research": False,
             "deadline": None,
@@ -1243,10 +1263,10 @@ def test_generate_briefing_defaults_to_qwen_path(capsys, monkeypatch):
     summarize.generate_briefing(args)
     payload = json.loads(capsys.readouterr().out)
     assert payload["summary_mode"] == "llm"
-    assert payload["summary_model_used"] == "qwen"
+    assert payload["summary_model_used"] == "ornith"
 
 
-def test_generate_analysis_hard_fails_when_configured_fallbacks_fail(monkeypatch):
+def test_generate_analysis_hard_fails_when_ornith_fails(monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [{"source": "CNBC", "title": "Headline one", "link": "https://example.com/1"}],
@@ -1257,8 +1277,8 @@ def test_generate_analysis_hard_fails_when_configured_fallbacks_fail(monkeypatch
     monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
-    monkeypatch.setenv("FINANCE_NEWS_SUMMARY_FALLBACKS", "qwen")
-    monkeypatch.setattr(summarize, "summarize_with_qwen", lambda *_a, **_k: "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set")
+    monkeypatch.setenv("FINANCE_NEWS_SUMMARY_FALLBACKS", "ds4")
+    monkeypatch.setattr(summarize, "summarize_with_ornith", lambda *_a, **_k: "⚠️ Ornith briefing error: KALLIOPE_SERVING_API_KEY not set")
 
     args = type(
         "Args",
@@ -1267,7 +1287,7 @@ def test_generate_analysis_hard_fails_when_configured_fallbacks_fail(monkeypatch
             "lang": "en",
             "style": "analysis",
             "time": None,
-            "model": "qwen",
+            "model": "ornith",
             "json": True,
             "research": False,
             "deadline": None,

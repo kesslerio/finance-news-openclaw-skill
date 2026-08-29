@@ -14,6 +14,9 @@ finance-news briefing --morning --lang de
 
 # Analysis style (more detailed)
 finance-news briefing --style analysis
+
+# Explicit manual DS4 run (scheduled workflows never pass this override)
+finance-news briefing --style analysis --model ds4
 ```
 
 ## Market Data
