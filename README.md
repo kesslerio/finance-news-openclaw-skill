@@ -56,19 +56,20 @@ finance-news briefing --morning --lang de --fast --deadline 300
 | `FINANCE_NEWS_TARGET` | Delivery target (WhatsApp JID, group name, or Telegram chat ID) | *Required* |
 | `FINANCE_NEWS_CHANNEL` | Delivery channel | `whatsapp` or `telegram` |
 | `KALLIOPE_SERVING_API_KEY` | Bearer token for the scheduled Kalliope Ornith route (required) | *Required* |
-| `FINANCE_NEWS_QWEN_BASE_URL` | Legacy-named Kalliope route base URL | `http://100.124.155.99:4000/v1` |
-| `FINANCE_NEWS_QWEN_MODEL` | Legacy-named model override; scheduled default is Ornith | `ornith-1.5:35b-medium` |
-| `FINANCE_NEWS_DS4_BASE_URL` | DS4 route base URL (manual writer override / deep-research primary) | `http://gx10r-head:8888/v1` |
+| `FINANCE_NEWS_ORNITH_BASE_URL` | Scheduled Kalliope route base URL | `http://100.124.155.99:4000/v1` |
+| `FINANCE_NEWS_ORNITH_MODEL` | Scheduled model; non-Ornith values are rejected | `ornith-1.5:35b-medium` |
+| `FINANCE_NEWS_DS4_BASE_URL` | DS4 route base URL (manual writer override / deep-research primary) | `http://100.120.26.16:8888/v1` |
 | `FINANCE_NEWS_DS4_MODEL` | DS4 model | `deepseek-v4-flash-0731` |
 | `FINANCE_NEWS_DS4_API_KEY` | Optional bearer token for the DS4 route | *(unset)* |
 | `SKILL_DIR` | Path to skill directory (for Lobster) | `$HOME/projects/finance-news-openclaw-skill` |
 
-Summaries, headline selection, and translation default exclusively to
-**Ornith 1.5** (`ornith-1.5:35b-medium` on Kalliope). The legacy `QWEN` variable
-names remain for compatibility. DS4 is available only through an explicit manual
-model override. Deep research (`research.py`) is also an explicit CLI action and
-uses DS4-high as its primary. All routes are OpenAI-compatible tailnet endpoints;
-there is no cloud fallback.
+Summaries, headline selection, and translation use **Ornith 1.5** exclusively
+(`ornith-1.5:35b-medium` on Kalliope). Legacy `FINANCE_NEWS_QWEN_*` variables and
+the `qwen` route value remain compatibility aliases, but a non-Ornith model value
+is rejected before network I/O. DS4 is available only through an explicit manual
+`--model ds4` call. Deep research (`research.py`) is also an explicit CLI action
+and uses DS4-high as its primary. All routes are OpenAI-compatible tailnet
+endpoints; there is no cloud fallback.
 
 ## Installation
 

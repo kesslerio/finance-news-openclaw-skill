@@ -224,17 +224,6 @@
       "description": "US Market Close (4:00 PM ET = 1:00 PM PT)"
     }
   },
-  "llm": {
-    "headline_model_order": [
-      "qwen"
-    ],
-    "summary_model_order": [
-      "qwen"
-    ],
-    "translation_model_order": [
-      "qwen"
-    ]
-  },
   "translations": {
     "en": {
       "title_morning": "Morning Briefing",

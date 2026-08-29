@@ -17,7 +17,7 @@ from research import (
     format_raw_data_report,
     generate_research_content,
     research_with_ds4,
-    research_with_qwen,
+    research_with_ornith,
 )
 
 
@@ -259,36 +259,47 @@ class TestResearchWithDS4:
         assert "⚠️ DS4 research error" in result
 
 
-class TestResearchWithQwen:
-    """Tests for research_with_qwen() - the Qwen fallback route."""
+class TestResearchWithOrnith:
+    """Tests for the Ornith fallback route."""
 
     def test_legacy_route_defaults_to_ornith(self):
-        assert research.DEFAULT_QWEN_MODEL == "ornith-1.5:35b-medium"
+        assert research.DEFAULT_ORNITH_MODEL == "ornith-1.5:35b-medium"
 
-    def test_uses_qwen_route(self, monkeypatch):
-        """Fallback calls the local Qwen route with the serving key."""
+    def test_uses_ornith_route(self, monkeypatch):
+        """Fallback calls the local Ornith route with the serving key."""
         captured = {}
 
         def fake_call(prompt, **kwargs):
             captured["kwargs"] = kwargs
-            return "Qwen report"
+            return "Ornith report"
 
         monkeypatch.setenv("KALLIOPE_SERVING_API_KEY", "serving-key")
-        monkeypatch.setenv("FINANCE_NEWS_QWEN_BASE_URL", "http://qwen.test/v1")
-        monkeypatch.setenv("FINANCE_NEWS_QWEN_MODEL", "qwen-test")
+        monkeypatch.setenv("FINANCE_NEWS_ORNITH_BASE_URL", "http://ornith.test/v1")
+        monkeypatch.setenv("FINANCE_NEWS_ORNITH_MODEL", "ornith-1.5:test")
         monkeypatch.setattr(research, "call_openai_chat", fake_call)
 
-        assert research_with_qwen("content") == "Qwen report"
-        assert captured["kwargs"]["base_url"] == "http://qwen.test/v1"
-        assert captured["kwargs"]["model"] == "qwen-test"
+        assert research_with_ornith("content") == "Ornith report"
+        assert captured["kwargs"]["base_url"] == "http://ornith.test/v1"
+        assert captured["kwargs"]["model"] == "ornith-1.5:test"
         assert captured["kwargs"]["api_key"] == "serving-key"
 
     def test_requires_serving_key(self, monkeypatch):
         """Fail closed when the serving key is missing."""
         monkeypatch.delenv("KALLIOPE_SERVING_API_KEY", raising=False)
-        result = research_with_qwen("content")
+        result = research_with_ornith("content")
 
-        assert result == "⚠️ Qwen research error: KALLIOPE_SERVING_API_KEY not set"
+        assert result == "⚠️ Ornith research error: KALLIOPE_SERVING_API_KEY not set"
+
+    def test_rejects_non_ornith_model_override(self, monkeypatch):
+        monkeypatch.setenv("KALLIOPE_SERVING_API_KEY", "serving-key")
+        monkeypatch.setenv("FINANCE_NEWS_ORNITH_MODEL", "qwen3.8:27b-fast")
+        monkeypatch.setattr(
+            research,
+            "call_openai_chat",
+            lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("network must not be called")),
+        )
+
+        assert "rejected model override" in research_with_ornith("content")
 
 
 class TestFormatRawDataReport:
@@ -335,20 +346,20 @@ class TestGenerateResearchContent:
             assert result["source"] == "ds4"
             mock_ds4.assert_called_once()
 
-    def test_falls_back_to_qwen_when_ds4_fails(self, sample_market_data, sample_portfolio_data):
-        """Use the Qwen route when the DS4 route fails."""
+    def test_falls_back_to_ornith_when_ds4_fails(self, sample_market_data, sample_portfolio_data):
+        """Use the Ornith route when the DS4 route fails."""
         with patch("research.research_with_ds4", return_value="⚠️ DS4 research error: timeout"):
-            with patch("research.research_with_qwen", return_value="Qwen report") as mock_qwen:
+            with patch("research.research_with_ornith", return_value="Ornith report") as mock_ornith:
                 result = generate_research_content(sample_market_data, sample_portfolio_data)
 
-                assert result["report"] == "Qwen report"
-                assert result["source"] == "qwen"
-                mock_qwen.assert_called_once()
+                assert result["report"] == "Ornith report"
+                assert result["source"] == "ornith"
+                mock_ornith.assert_called_once()
 
     def test_falls_back_to_raw_report(self, sample_market_data, sample_portfolio_data):
         """Fall back to raw report when both local routes fail."""
         with patch("research.research_with_ds4", return_value="⚠️ DS4 research error: timeout"):
-            with patch("research.research_with_qwen", return_value="⚠️ Qwen research error: timeout"):
+            with patch("research.research_with_ornith", return_value="⚠️ Ornith research error: timeout"):
                 result = generate_research_content(sample_market_data, sample_portfolio_data)
 
             assert "## Market Data" in result["report"]

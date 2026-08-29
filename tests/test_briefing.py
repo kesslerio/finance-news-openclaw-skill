@@ -31,6 +31,7 @@ def test_generate_and_send_success():
         args.deadline = 300
         args.fast = False
         args.llm = False
+        args.model = "ornith"
         args.debug = False
         args.json = True
         args.send = False
@@ -44,6 +45,31 @@ def test_generate_and_send_success():
         assert "summarize.py" in str(call_args[1])
         assert "--time" in call_args
         assert "morning" in call_args
+        assert call_args[call_args.index("--model") + 1] == "ornith"
+
+
+def test_generate_and_send_honors_explicit_manual_ds4_for_analysis():
+    mock_briefing_data = {"macro_message": "Manual analysis"}
+
+    with patch("briefing.subprocess.run") as mock_run:
+        mock_run.return_value = Mock(returncode=0, stdout=json.dumps(mock_briefing_data))
+        args = Mock(
+            time="morning",
+            style="analysis",
+            lang="en",
+            deadline=300,
+            fast=False,
+            llm=False,
+            model="ds4",
+            debug=False,
+            json=True,
+            send=False,
+        )
+
+        generate_and_send(args)
+
+        call_args = mock_run.call_args[0][0]
+        assert call_args[call_args.index("--model") + 1] == "ds4"
 
 def test_generate_and_send_with_whatsapp():
     mock_briefing_data = {
@@ -67,6 +93,7 @@ def test_generate_and_send_with_whatsapp():
         args.deadline = None
         args.fast = True
         args.llm = False
+        args.model = "ornith"
         args.json = False
         args.send = True
         args.group = "Test Group"
@@ -93,6 +120,7 @@ def test_generate_and_send_failure():
         args.deadline = None
         args.fast = False
         args.llm = False
+        args.model = "ornith"
         args.json = False
         args.send = False
         args.debug = False

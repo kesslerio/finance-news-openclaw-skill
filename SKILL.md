@@ -67,6 +67,6 @@ lobster "workflows.run --file workflows/briefing.yaml"
 
 | Issue | Fix |
 |-------|-----|
-| Briefing writer failing | Verify `KALLIOPE_SERVING_API_KEY` is set and the local Qwen route (`http://100.124.155.99:4000/v1`) is reachable; the DS4 route (`http://gx10r-head:8888/v1`) is the fallback |
+| Briefing writer failing | Verify `KALLIOPE_SERVING_API_KEY` is set and the Kalliope Ornith route (`http://100.124.155.99:4000/v1`) is reachable; scheduled runs fail closed and do not select another model |
 | RSS feeds timing out | Check network; WSJ/Barron's may need subscription cookies; CNBC/Yahoo always work |
 | WhatsApp delivery failing | Verify group exists and bot has access; run `openclaw doctor` |

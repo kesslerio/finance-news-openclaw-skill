@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 News Summarizer - Generate market briefings in configurable language.
-Uses the local kalliope Qwen route for briefing generation with a local
-gx10 DeepSeek-V4-Flash (DS4) route as fallback.
+Scheduled generation uses Kalliope Ornith only. DS4 is available only when a
+human explicitly selects it with ``--model ds4``.
 """
 
 import argparse
@@ -41,12 +41,10 @@ PORTFOLIO_MOVER_MAX = 8
 PORTFOLIO_MOVER_MIN_ABS_CHANGE = 1.0
 MAX_HEADLINES_IN_PROMPT = 10
 TOP_HEADLINES_COUNT = 5
-DEFAULT_LLM_FALLBACK = ["qwen"]
 # Local tailnet routes for all LLM writing/selection/translation.
-# The legacy "qwen" route name points to Kalliope Ornith for scheduled work.
 # DS4 remains available only as an explicit manual writer override.
-DEFAULT_QWEN_BASE_URL = "http://100.124.155.99:4000/v1"
-DEFAULT_QWEN_MODEL = "ornith-1.5:35b-medium"
+DEFAULT_ORNITH_BASE_URL = "http://100.124.155.99:4000/v1"
+DEFAULT_ORNITH_MODEL = "ornith-1.5:35b-medium"
 DEFAULT_DS4_BASE_URL = "http://100.120.26.16:8888/v1"
 DEFAULT_DS4_MODEL = "deepseek-v4-flash-0731"
 HEADLINE_SHORTLIST_SIZE = 20
@@ -64,7 +62,7 @@ INTL_TICKER_NAME_OVERRIDES = {
     "8411.T": "Mizuho Financial",
 }
 
-SUPPORTED_MODELS = {"qwen", "ds4"}
+SUPPORTED_MODELS = {"ornith", "qwen", "ds4"}
 
 # Portfolio prioritization weights
 PORTFOLIO_PRIORITY_WEIGHTS = {
@@ -141,27 +139,29 @@ def score_portfolio_stock(symbol: str, stock_data: dict) -> float:
     return type_score * w["type"] + volatility_score * w["volatility"] + news_score * w["news_volume"]
 
 
-def parse_model_list(raw: str | None, default: list[str]) -> list[str]:
-    if not raw:
-        return default
-    items = [item.strip() for item in raw.split(",") if item.strip()]
-    result: list[str] = []
-    for item in items:
-        if item in SUPPORTED_MODELS and item not in result:
-            result.append(item)
-    return result or default
+def normalize_writer_route(route: str | None) -> str:
+    """Map the legacy route name to its canonical provider."""
+    return "ornith" if route in {None, "", "qwen"} else route
 
 
-def get_qwen_base_url() -> str:
-    return (os.getenv("FINANCE_NEWS_QWEN_BASE_URL") or DEFAULT_QWEN_BASE_URL).strip()
-
-
-def get_qwen_model() -> str:
+def get_ornith_base_url() -> str:
     return (
-        os.getenv("FINANCE_NEWS_QWEN_MODEL")
-        or os.getenv("QWEN_MODEL")
-        or DEFAULT_QWEN_MODEL
+        os.getenv("FINANCE_NEWS_ORNITH_BASE_URL")
+        or os.getenv("FINANCE_NEWS_QWEN_BASE_URL")
+        or DEFAULT_ORNITH_BASE_URL
     ).strip()
+
+
+def get_ornith_model() -> str:
+    model = (
+        os.getenv("FINANCE_NEWS_ORNITH_MODEL")
+        or os.getenv("FINANCE_NEWS_QWEN_MODEL")
+        or os.getenv("QWEN_MODEL")
+        or DEFAULT_ORNITH_MODEL
+    ).strip()
+    if not model.startswith("ornith-1.5:"):
+        raise ValueError(f"scheduled Ornith route rejected model override: {model}")
+    return model
 
 
 def get_ds4_base_url() -> str:
@@ -524,21 +524,29 @@ def _briefing_max_tokens() -> int:
     return int(os.getenv("FINANCE_NEWS_BRIEFING_MAX_TOKENS", "1200"))
 
 
-def run_qwen_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
-    """Call the local kalliope Qwen route (OpenAI-compatible)."""
+def run_ornith_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
+    """Call the scheduled Kalliope Ornith route (OpenAI-compatible)."""
     api_key = (os.getenv("KALLIOPE_SERVING_API_KEY") or "").strip()
     if not api_key:
-        return "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set"
+        return "⚠️ Ornith briefing error: KALLIOPE_SERVING_API_KEY not set"
+    try:
+        model = get_ornith_model()
+    except ValueError as exc:
+        return f"⚠️ Ornith briefing error: {exc}"
     return call_openai_chat(
         prompt,
-        base_url=get_qwen_base_url(),
-        model=get_qwen_model(),
+        base_url=get_ornith_base_url(),
+        model=model,
         api_key=api_key,
         max_tokens=_briefing_max_tokens(),
         timeout=timeout,
         deadline=deadline,
-        error_label="Qwen briefing error",
-        reasoning_effort=os.getenv("FINANCE_NEWS_QWEN_REASONING_EFFORT") or None,
+        error_label="Ornith briefing error",
+        reasoning_effort=(
+            os.getenv("FINANCE_NEWS_ORNITH_REASONING_EFFORT")
+            or os.getenv("FINANCE_NEWS_QWEN_REASONING_EFFORT")
+            or None
+        ),
     )
 
 
@@ -565,7 +573,7 @@ def run_agent_prompt(
 ) -> str:
     """Run a prompt through the scheduled Kalliope Ornith route."""
     del session_id
-    return run_qwen_prompt(prompt, deadline=deadline, timeout=timeout)
+    return run_ornith_prompt(prompt, deadline=deadline, timeout=timeout)
 
 
 def normalize_title(title: str) -> str:
@@ -1091,9 +1099,9 @@ def translate_headlines(
         return [], True
 
     print(f"🔤 Translating {len(titles)} headlines...", file=sys.stderr)
-    translated, success = translate_via_qwen(titles, deadline=deadline)
+    translated, success = translate_via_ornith(titles, deadline=deadline)
     if success:
-        print("  ↳ ✅ Translation successful via Qwen", file=sys.stderr)
+        print("  ↳ ✅ Translation successful via Ornith", file=sys.stderr)
         return translated, True
 
     return titles, False
@@ -1142,11 +1150,11 @@ def _translate_via_prompt_runner(
     return translated, True
 
 
-def translate_via_qwen(
+def translate_via_ornith(
     titles: list[str],
     deadline: float | None,
 ) -> tuple[list[str], bool]:
-    return _translate_via_prompt_runner(titles, deadline, run_qwen_prompt, "Qwen")
+    return _translate_via_prompt_runner(titles, deadline, run_ornith_prompt, "Ornith")
 
 
 def translate_via_ds4(
@@ -1248,15 +1256,15 @@ Here are the current market items:
 """
 
 
-def summarize_with_qwen(
+def summarize_with_ornith(
     content: str,
     language: str = "de",
     style: str = "briefing",
     deadline: float | None = None,
 ) -> str:
-    """Generate AI summary using the local Qwen route."""
+    """Generate an AI summary using the scheduled Ornith route."""
     prompt = _build_summary_prompt(content, language, style)
-    reply_text = run_qwen_prompt(prompt, deadline=deadline, timeout=60)
+    reply_text = run_ornith_prompt(prompt, deadline=deadline, timeout=60)
     if reply_text.startswith("⚠️"):
         return reply_text
     return reply_text + format_disclaimer(language)
@@ -1268,7 +1276,7 @@ def summarize_with_ds4(
     style: str = "briefing",
     deadline: float | None = None,
 ) -> str:
-    """Generate AI summary using the local DS4 route (fallback writer)."""
+    """Generate an AI summary using the explicitly selected DS4 route."""
     prompt = _build_summary_prompt(content, language, style)
     reply_text = run_ds4_prompt(prompt, deadline=deadline, timeout=60)
     if reply_text.startswith("⚠️"):
@@ -1940,24 +1948,11 @@ def generate_briefing(args):
     else:
         content = raw_content
 
-    model = getattr(args, 'model', "qwen")
-    # Qwen is the active writer for the supported summary styles. The outer
-    # caller may still pass --llm, but briefing no longer relies on that flag
-    # to enter the AI path.
+    model = normalize_writer_route(getattr(args, 'model', None))
+    # The requested writer is a single-attempt route. Automatic fallback is
+    # prohibited so an Ornith outage cannot load another model.
     use_llm = True
-    summary_primary = os.environ.get("FINANCE_NEWS_SUMMARY_MODEL")
-    summary_fallback_env = os.environ.get("FINANCE_NEWS_SUMMARY_FALLBACKS")
-    summary_list = parse_model_list(
-        summary_fallback_env,
-        config.get("llm", {}).get("summary_model_order", DEFAULT_LLM_FALLBACK),
-    )
-    if summary_primary:
-        if summary_primary not in summary_list:
-            summary_list = [summary_primary] + summary_list
-        else:
-            summary_list = [summary_primary] + [m for m in summary_list if m != summary_primary]
-    if use_llm and model and model in SUPPORTED_MODELS:
-        summary_list = [model] + [m for m in summary_list if m != model]
+    summary_list = [model]
     summary_mode = "deterministic"
     summary_model_used = "deterministic"
     summary = ""
@@ -1987,8 +1982,8 @@ def generate_briefing(args):
         summary_mode = "llm"
         summary_model_used = "llm_failed"
         for candidate in summary_list:
-            if candidate == "qwen":
-                summary = summarize_with_qwen(content, language, args.style, deadline=deadline)
+            if candidate == "ornith":
+                summary = summarize_with_ornith(content, language, args.style, deadline=deadline)
             elif candidate == "ds4":
                 summary = summarize_with_ds4(content, language, args.style, deadline=deadline)
             else:
@@ -2147,9 +2142,9 @@ def main():
                         default=None, help='Briefing type (default: auto)')
     parser.add_argument('--json', action='store_true', help='Output as JSON')
     parser.add_argument('--research', action='store_true', help='Include deep research section (slower)')
-    parser.add_argument('--llm', action='store_true', help='Force LLM summary for non-briefing styles (briefing uses Qwen by default)')
-    parser.add_argument('--model', choices=sorted(SUPPORTED_MODELS), default='qwen',
-                        help='Local writer route override (qwen or ds4)')
+    parser.add_argument('--llm', action='store_true', help='Force LLM summary for non-briefing styles (briefing uses Ornith by default)')
+    parser.add_argument('--model', choices=sorted(SUPPORTED_MODELS), default='ornith',
+                        help='Writer route (ornith; qwen is a legacy alias; ds4 is manual-only)')
     parser.add_argument('--deadline', type=int, default=None, help='Overall deadline in seconds')
     parser.add_argument('--fast', action='store_true', help='Use fast mode (shorter timeouts, fewer items)')
     parser.add_argument('--debug', action='store_true', help='Write debug log with sources')

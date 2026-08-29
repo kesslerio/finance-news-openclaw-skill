@@ -44,11 +44,8 @@ steps:
         --network host \
         --workdir /app \
         -e KALLIOPE_SERVING_API_KEY \
-        -e FINANCE_NEWS_QWEN_BASE_URL \
-        -e FINANCE_NEWS_QWEN_MODEL \
-        -e FINANCE_NEWS_DS4_BASE_URL \
-        -e FINANCE_NEWS_DS4_MODEL \
-        -e FINANCE_NEWS_DS4_API_KEY \
+        -e FINANCE_NEWS_ORNITH_BASE_URL \
+        -e FINANCE_NEWS_ORNITH_MODEL \
         -v "$SKILL_DIR/config:/app/config:ro" \
         -v "$SKILL_DIR/scripts:/app/scripts:ro" \
         $OPENBB_MOUNT \
@@ -73,7 +70,7 @@ steps:
       fi
       echo "$OUTFILE"
     stdin: $generate.stdout
-    description: Translate portfolio headlines via openclaw
+    description: Translate portfolio headlines via Ornith
 
   # Validate structured macro output before approval/send
   - id: validate
@@ -84,7 +81,7 @@ steps:
       STRUCT_OK=$(jq -r '.summary_structure_ok // false' "$OUTFILE")
 
       case "$MODEL_USED" in
-        qwen|ds4) ;;
+        ornith) ;;
         *)
           echo "❌ Refusing to send briefing from unsupported writer"
           jq '{summary_mode, summary_model_used, summary_structure_ok, summary_missing_sections, generator}' "$OUTFILE"

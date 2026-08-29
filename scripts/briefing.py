@@ -79,7 +79,7 @@ def generate_and_send(args):
     force_llm = bool(args.llm or args.style == 'briefing')
     if force_llm:
         cmd.append('--llm')
-        cmd.extend(['--model', args.model])
+    cmd.extend(['--model', args.model])
 
     if args.debug:
         cmd.append('--debug')
@@ -157,8 +157,9 @@ def main():
     parser.add_argument('--deadline', type=int, default=None,
                         help='Overall deadline in seconds')
     parser.add_argument('--llm', action='store_true', help='Force LLM summary for non-briefing styles')
-    parser.add_argument('--model', choices=['qwen', 'ds4'],
-                        default='qwen', help='Local writer route override (qwen or ds4)')
+    parser.add_argument('--model', choices=['ornith', 'qwen', 'ds4'],
+                        default='ornith',
+                        help='Writer route (ornith; qwen is a legacy alias; ds4 is manual-only)')
     parser.add_argument('--fast', action='store_true',
                         help='Use fast mode (shorter timeouts, fewer items)')
     parser.add_argument('--debug', action='store_true',
