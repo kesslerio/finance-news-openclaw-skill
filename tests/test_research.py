@@ -262,6 +262,9 @@ class TestResearchWithDS4:
 class TestResearchWithQwen:
     """Tests for research_with_qwen() - the Qwen fallback route."""
 
+    def test_legacy_route_defaults_to_ornith(self):
+        assert research.DEFAULT_QWEN_MODEL == "ornith-1.5:35b-medium"
+
     def test_uses_qwen_route(self, monkeypatch):
         """Fallback calls the local Qwen route with the serving key."""
         captured = {}

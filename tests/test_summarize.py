@@ -171,6 +171,11 @@ def test_format_whatsapp_message_replaces_markdown_headings_and_bold():
     ]
 
 
+def test_scheduled_model_defaults_are_ornith_only():
+    assert summarize.DEFAULT_QWEN_MODEL == "ornith-1.5:35b-medium"
+    assert summarize.DEFAULT_LLM_FALLBACK == ["qwen"]
+
+
 def test_translate_via_qwen_parses_markdown_json(monkeypatch):
     monkeypatch.setattr(
         summarize,
@@ -200,17 +205,20 @@ def test_translate_headlines_uses_qwen_first(monkeypatch):
     assert translated == ["Titel"]
 
 
-def test_translate_headlines_falls_back_to_ds4(monkeypatch):
+def test_translate_headlines_does_not_fall_back_to_ds4(monkeypatch):
     monkeypatch.setattr(
         summarize,
         "translate_via_qwen",
         lambda titles, deadline: (titles, False),
     )
-    monkeypatch.setattr(summarize, "translate_via_ds4", lambda titles, deadline: (["Titel"], True))
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("scheduled translation must not call DS4")
+
+    monkeypatch.setattr(summarize, "translate_via_ds4", fail_if_called)
 
     translated, success = summarize.translate_headlines(["Title"], deadline=None)
-    assert success is True
-    assert translated == ["Titel"]
+    assert success is False
+    assert translated == ["Title"]
 
 
 def test_translate_via_qwen_timeout(monkeypatch):
@@ -751,7 +759,7 @@ def test_generate_briefing_zero_deadline_disables_timeout(capsys, monkeypatch):
     assert payload["summary_model_used"] == "qwen"
 
 
-def test_generate_briefing_falls_back_to_ds4_when_qwen_unavailable(capsys, monkeypatch):
+def test_generate_briefing_does_not_fall_back_to_ds4(monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [
@@ -774,17 +782,11 @@ def test_generate_briefing_falls_back_to_ds4_when_qwen_unavailable(capsys, monke
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
     monkeypatch.setattr(summarize, "summarize_with_qwen", lambda *_a, **_k: "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set")
-    monkeypatch.setattr(
-        summarize,
-        "summarize_with_ds4",
-        lambda *_a, **_k: (
-            "### Markets\nQuiet.\n\n"
-            "### Sentiment\nNeutral.\n\n"
-            "### Top 5 Headlines\n1. Headline one\n\n"
-            "### Portfolio Impact\nNone.\n\n"
-            "### Watchpoints\n- Watch one"
-        ),
-    )
+
+    def fail_if_ds4_called(*_args, **_kwargs):
+        raise AssertionError("scheduled briefing must not call DS4")
+
+    monkeypatch.setattr(summarize, "summarize_with_ds4", fail_if_ds4_called)
 
     args = type(
         "Args",
@@ -803,13 +805,11 @@ def test_generate_briefing_falls_back_to_ds4_when_qwen_unavailable(capsys, monke
         },
     )()
 
-    summarize.generate_briefing(args)
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["summary_model_used"] == "ds4"
-    assert "### Markets" in payload["summary"]
+    with pytest.raises(RuntimeError, match="KALLIOPE_SERVING_API_KEY"):
+        summarize.generate_briefing(args)
 
 
-def test_generate_analysis_falls_back_to_ds4_when_qwen_unavailable(monkeypatch, capsys):
+def test_generate_analysis_does_not_fall_back_to_ds4(monkeypatch):
     def fake_market_news(*_args, **_kwargs):
         return {
             "headlines": [
@@ -830,7 +830,11 @@ def test_generate_analysis_falls_back_to_ds4_when_qwen_unavailable(monkeypatch, 
     monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
     monkeypatch.setattr(summarize, "datetime", FixedDateTime)
     monkeypatch.setattr(summarize, "summarize_with_qwen", lambda *_a, **_k: "⚠️ Qwen briefing error: KALLIOPE_SERVING_API_KEY not set")
-    monkeypatch.setattr(summarize, "summarize_with_ds4", lambda *_a, **_k: "## Analysis\n\nDS4 analysis body")
+
+    def fail_if_ds4_called(*_args, **_kwargs):
+        raise AssertionError("scheduled analysis must not call DS4")
+
+    monkeypatch.setattr(summarize, "summarize_with_ds4", fail_if_ds4_called)
 
     args = type(
         "Args",
@@ -849,10 +853,8 @@ def test_generate_analysis_falls_back_to_ds4_when_qwen_unavailable(monkeypatch, 
         },
     )()
 
-    summarize.generate_briefing(args)
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["summary_model_used"] == "ds4"
-    assert "DS4 analysis body" in payload["summary"]
+    with pytest.raises(RuntimeError, match="KALLIOPE_SERVING_API_KEY"):
+        summarize.generate_briefing(args)
 
 
 def test_generate_analysis_uses_qwen_even_without_llm_flag(capsys, monkeypatch):

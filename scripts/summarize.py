@@ -41,12 +41,12 @@ PORTFOLIO_MOVER_MAX = 8
 PORTFOLIO_MOVER_MIN_ABS_CHANGE = 1.0
 MAX_HEADLINES_IN_PROMPT = 10
 TOP_HEADLINES_COUNT = 5
-DEFAULT_LLM_FALLBACK = ["qwen", "ds4"]
+DEFAULT_LLM_FALLBACK = ["qwen"]
 # Local tailnet routes for all LLM writing/selection/translation.
-# Qwen (kalliope) is the deterministic default writer/selector/translator;
-# DS4 (gx10 DeepSeek-V4-Flash) is the local fallback writer.
+# The legacy "qwen" route name points to Kalliope Ornith for scheduled work.
+# DS4 remains available only as an explicit manual writer override.
 DEFAULT_QWEN_BASE_URL = "http://100.124.155.99:4000/v1"
-DEFAULT_QWEN_MODEL = "qwen3.8:27b-fast"
+DEFAULT_QWEN_MODEL = "ornith-1.5:35b-medium"
 DEFAULT_DS4_BASE_URL = "http://100.120.26.16:8888/v1"
 DEFAULT_DS4_MODEL = "deepseek-v4-flash-0731"
 HEADLINE_SHORTLIST_SIZE = 20
@@ -563,14 +563,9 @@ def run_agent_prompt(
     session_id: str = "finance-news-headlines",
     timeout: int = 45,
 ) -> str:
-    """Run a prompt through the local Qwen route, then the local DS4 route on failure."""
+    """Run a prompt through the scheduled Kalliope Ornith route."""
     del session_id
-    reply = run_qwen_prompt(prompt, deadline=deadline, timeout=timeout)
-    if not reply.startswith("⚠️"):
-        return reply
-
-    print(f"  ↳ {reply}; falling back to DS4 route", file=sys.stderr)
-    return run_ds4_prompt(prompt, deadline=deadline, timeout=timeout)
+    return run_qwen_prompt(prompt, deadline=deadline, timeout=timeout)
 
 
 def normalize_title(title: str) -> str:
@@ -1089,7 +1084,7 @@ def translate_headlines(
 ) -> tuple[list[str], bool]:
     """Translate headlines to German using LLM.
 
-    Uses the local Qwen route first, then the local DS4 route.
+    Uses the scheduled Kalliope Ornith route only.
     Returns (translated_titles, success) or (original_titles, False) on failure.
     """
     if not titles:
@@ -1099,12 +1094,6 @@ def translate_headlines(
     translated, success = translate_via_qwen(titles, deadline=deadline)
     if success:
         print("  ↳ ✅ Translation successful via Qwen", file=sys.stderr)
-        return translated, True
-
-    print("  ↳ Qwen failed, falling back to DS4 route", file=sys.stderr)
-    translated, success = translate_via_ds4(titles, deadline=deadline)
-    if success:
-        print("  ↳ ✅ Translation successful via DS4", file=sys.stderr)
         return translated, True
 
     return titles, False
@@ -1831,7 +1820,7 @@ def generate_briefing(args):
     )
 
     # Headline selection uses deterministic ranking first; the LLM path uses
-    # the local Qwen route with a local DS4 route fallback.
+    # the scheduled Kalliope Ornith route. Other models require a manual override.
 
     shortlist_by_lang = config.get("headline_shortlist_size_by_lang", {})
     shortlist_size = HEADLINE_SHORTLIST_SIZE

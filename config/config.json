@@ -226,16 +226,13 @@
   },
   "llm": {
     "headline_model_order": [
-      "qwen",
-      "ds4"
+      "qwen"
     ],
     "summary_model_order": [
-      "qwen",
-      "ds4"
+      "qwen"
     ],
     "translation_model_order": [
-      "qwen",
-      "ds4"
+      "qwen"
     ]
   },
   "translations": {
