@@ -1300,3 +1300,68 @@ def test_generate_analysis_hard_fails_when_ornith_fails(monkeypatch):
     import pytest
     with pytest.raises(RuntimeError, match="KALLIOPE_SERVING_API_KEY"):
         summarize.generate_briefing(args)
+
+
+def test_briefing_max_tokens_covers_thinking_budget(monkeypatch):
+    # 35b-medium gets a 4096-token thinking budget at kalliope and the vLLM
+    # backend counts reasoning inside max_tokens (finish_reason=length with
+    # content=None on every 2026-09-09 portfolio writer call at 1200).
+    monkeypatch.delenv("FINANCE_NEWS_BRIEFING_MAX_TOKENS", raising=False)
+    assert summarize._briefing_max_tokens() == 6400
+
+
+def test_briefing_max_tokens_env_override_still_wins(monkeypatch):
+    monkeypatch.setenv("FINANCE_NEWS_BRIEFING_MAX_TOKENS", "1234")
+    assert summarize._briefing_max_tokens() == 1234
+
+
+def test_ornith_writer_retries_once_on_transient_empty(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_run(prompt, deadline=None, timeout=60):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "⚠️ Ornith briefing error: empty API response"
+        return "richtiges Briefing"
+
+    monkeypatch.setattr(summarize, "run_ornith_prompt", fake_run)
+    monkeypatch.setattr(summarize, "_build_summary_prompt", lambda *a, **k: "p")
+    monkeypatch.setattr(summarize, "format_disclaimer", lambda lang: "")
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda s: None)
+
+    result = summarize.summarize_with_ornith("content", deadline=_time.monotonic() + 300)
+    assert calls["n"] == 2
+    assert result == "richtiges Briefing"
+
+
+def test_ornith_writer_no_retry_on_config_failure(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_run(prompt, deadline=None, timeout=60):
+        calls["n"] += 1
+        return "⚠️ Ornith briefing error: KALLIOPE_SERVING_API_KEY not set"
+
+    monkeypatch.setattr(summarize, "run_ornith_prompt", fake_run)
+    monkeypatch.setattr(summarize, "_build_summary_prompt", lambda *a, **k: "p")
+
+    result = summarize.summarize_with_ornith("content", deadline=None)
+    assert calls["n"] == 1
+    assert result.startswith("⚠️")
+
+
+def test_ornith_writer_no_retry_without_budget(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_run(prompt, deadline=None, timeout=60):
+        calls["n"] += 1
+        return "⚠️ Ornith briefing error: empty API response"
+
+    monkeypatch.setattr(summarize, "run_ornith_prompt", fake_run)
+    monkeypatch.setattr(summarize, "_build_summary_prompt", lambda *a, **k: "p")
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda s: None)
+
+    result = summarize.summarize_with_ornith("content", deadline=_time.monotonic() + 30)
+    assert calls["n"] == 1
+    assert result.startswith("⚠️")
