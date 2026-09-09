@@ -45,6 +45,24 @@ TOP_HEADLINES_COUNT = 5
 # DS4 remains available only as an explicit manual writer override.
 DEFAULT_ORNITH_BASE_URL = "http://100.124.155.99:4000/v1"
 DEFAULT_ORNITH_MODEL = "ornith-1.5:35b-medium"
+
+# One budgeted retry for transient single-attempt failures (repo lesson
+# #1149: a single blip must not cost the whole day). Only clearly transient
+# sentinel shapes retry; config/auth rejections fail immediately.
+_ORNITH_RETRY_MIN_SECONDS = 90
+_ORNITH_RETRY_DELAY_SECONDS = 10
+_TRANSIENT_ORNITH_SENTINELS = (
+    "empty api response",
+    "timed out",
+    "url error",
+    "connection error",
+    "temporarily unavailable",
+)
+
+
+def _is_transient_ornith_failure(sentinel: str) -> bool:
+    lowered = sentinel.lower()
+    return any(shape in lowered for shape in _TRANSIENT_ORNITH_SENTINELS)
 DEFAULT_DS4_BASE_URL = "http://100.120.26.16:8888/v1"
 DEFAULT_DS4_MODEL = "deepseek-v4-flash-0731"
 HEADLINE_SHORTLIST_SIZE = 20
@@ -521,7 +539,13 @@ def extract_agent_reply(raw: str) -> str:
 
 
 def _briefing_max_tokens() -> int:
-    return int(os.getenv("FINANCE_NEWS_BRIEFING_MAX_TOKENS", "1200"))
+    # The scheduled Ornith aliases spend this same budget on reasoning:
+    # kalliope maps 35b-medium to a 4096-token thinking budget and the vLLM
+    # backend counts reasoning tokens inside max_tokens, so a 1200 ceiling
+    # leaves no room for content (finish_reason=length with empty content,
+    # observed 2026-09-09 on every portfolio briefing). Keep the default at
+    # 4096 reasoning + 2304 output headroom.
+    return int(os.getenv("FINANCE_NEWS_BRIEFING_MAX_TOKENS", "6400"))
 
 
 def run_ornith_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
@@ -1265,6 +1289,13 @@ def summarize_with_ornith(
     """Generate an AI summary using the scheduled Ornith route."""
     prompt = _build_summary_prompt(content, language, style)
     reply_text = run_ornith_prompt(prompt, deadline=deadline, timeout=60)
+    if reply_text.startswith("⚠️") and _is_transient_ornith_failure(reply_text):
+        remaining = time_left(deadline)
+        if remaining is None or remaining >= _ORNITH_RETRY_MIN_SECONDS:
+            import time as _time
+            print("↻ Ornith transient failure; retrying once within the deadline", file=sys.stderr)
+            _time.sleep(_ORNITH_RETRY_DELAY_SECONDS)
+            reply_text = run_ornith_prompt(prompt, deadline=deadline, timeout=60)
     if reply_text.startswith("⚠️"):
         return reply_text
     return reply_text + format_disclaimer(language)
