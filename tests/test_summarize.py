@@ -106,7 +106,11 @@ def test_run_ornith_prompt_requires_api_key(monkeypatch):
 
     result = summarize.run_ornith_prompt("Write a briefing", deadline=None, timeout=45)
 
-    assert result == "⚠️ Ornith briefing error: KALLIOPE_SERVING_API_KEY not set"
+    # Same fail-closed behavior as before routing existed; only the wording
+    # moved. Asserted to name the variable, because "no credential" without a
+    # name is what sends someone hunting through four env files.
+    assert "KALLIOPE_SERVING_API_KEY" in result
+    assert result.startswith("⚠️ Briefing error:")
 
 
 def test_run_ornith_prompt_rejects_non_ornith_model_before_network(monkeypatch):
@@ -1365,3 +1369,94 @@ def test_ornith_writer_no_retry_without_budget(monkeypatch):
     result = summarize.summarize_with_ornith("content", deadline=_time.monotonic() + 30)
     assert calls["n"] == 1
     assert result.startswith("⚠️")
+
+# ---------------------------------------------------------------------------
+# Route selection. The point of these is not that a request is built; it is
+# that the machine a job names is the machine it reaches, and that nothing
+# quietly goes somewhere else.
+# ---------------------------------------------------------------------------
+
+def _capture_single_call(monkeypatch):
+    calls = []
+
+    def fake(prompt, **kwargs):
+        calls.append(kwargs)
+        return "briefed"
+
+    monkeypatch.setattr(summarize, "call_openai_chat", fake)
+    return calls
+
+
+def test_secondary_route_reaches_the_second_machine(monkeypatch):
+    calls = _capture_single_call(monkeypatch)
+    monkeypatch.setenv("LLM_ROUTE", "secondary")
+    monkeypatch.setenv("LLM_SECONDARY_REQUIRES_KEY", "0")
+    monkeypatch.delenv("KALLIOPE_SERVING_API_KEY", raising=False)
+
+    out = summarize.run_scheduled_prompt("p", deadline=None, timeout=30)
+
+    assert out == "briefed"
+    assert len(calls) == 1, "exactly one request per call is the standing rule"
+    assert calls[0]["base_url"] == summarize.DEFAULT_SECONDARY_BASE_URL
+    assert calls[0]["model"] == "qwen3.8-flash-next"
+    # Declared credential-free means none is sent, not an empty one.
+    assert not calls[0]["api_key"]
+
+
+def test_declared_credential_free_route_still_refuses_a_key_that_is_required(monkeypatch):
+    # The mirror of the above: the waiver is what permits a keyless request.
+    # Without it, a route that says it needs a credential must not send a
+    # request just because nothing happened to resolve.
+    calls = _capture_single_call(monkeypatch)
+    monkeypatch.setenv("LLM_ROUTE", "secondary")
+    monkeypatch.delenv("LLM_SECONDARY_REQUIRES_KEY", raising=False)
+
+    out = summarize.run_scheduled_prompt("p", deadline=None, timeout=30)
+
+    assert calls == []
+    assert "requires a credential" in out
+
+
+def test_unknown_route_fails_closed_and_does_not_use_the_other_machine(monkeypatch):
+    calls = _capture_single_call(monkeypatch)
+    monkeypatch.setenv("LLM_ROUTE", "sideways")
+    monkeypatch.setenv("KALLIOPE_SERVING_API_KEY", "test-key")
+
+    out = summarize.run_scheduled_prompt("p", deadline=None, timeout=30)
+
+    assert calls == [], "an unrecognised route must not fall through to a default send"
+    assert "unknown LLM_ROUTE" in out
+
+
+def test_primary_route_still_targets_mama_with_no_route_set(monkeypatch):
+    calls = _capture_single_call(monkeypatch)
+    monkeypatch.delenv("LLM_ROUTE", raising=False)
+    monkeypatch.setenv("KALLIOPE_SERVING_API_KEY", "test-key")
+
+    assert summarize.run_scheduled_prompt("p", deadline=None, timeout=30) == "briefed"
+    assert len(calls) == 1
+    assert "100.124.155.99" in calls[0]["base_url"]
+    assert calls[0]["api_key"] == "test-key"
+
+
+def test_route_cannot_select_a_model_outside_the_approved_set(monkeypatch):
+    calls = _capture_single_call(monkeypatch)
+    monkeypatch.setenv("LLM_ROUTE", "secondary")
+    monkeypatch.setenv("LLM_SECONDARY_REQUIRES_KEY", "0")
+    monkeypatch.setenv("LLM_SECONDARY_MODEL", "deepseek-v4-flash-0731")
+
+    out = summarize.run_scheduled_prompt("p", deadline=None, timeout=30)
+
+    assert calls == [], "a second machine must not become a route to a retired model"
+    assert "unapproved model" in out
+
+
+def test_legacy_name_still_resolves_the_selected_route(monkeypatch):
+    calls = _capture_single_call(monkeypatch)
+    monkeypatch.setenv("LLM_ROUTE", "secondary")
+    monkeypatch.setenv("LLM_SECONDARY_REQUIRES_KEY", "0")
+
+    summarize.run_ornith_prompt("p", deadline=None, timeout=30)
+
+    assert len(calls) == 1
+    assert calls[0]["base_url"] == summarize.DEFAULT_SECONDARY_BASE_URL

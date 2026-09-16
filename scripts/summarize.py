@@ -43,6 +43,32 @@ MAX_HEADLINES_IN_PROMPT = 10
 TOP_HEADLINES_COUNT = 5
 # Local tailnet routes for all LLM writing/selection/translation.
 # DS4 remains available only as an explicit manual writer override.
+# Scheduled route contract. LLM_ROUTE selects which machine a scheduled job
+# talks to, and is deliberately the same variable name used by
+# mama-automations/scripts/lib/mama/llm-config.sh, so one systemd drop-in moves
+# a job's whole model footprint instead of one repository's half of it.
+#
+# primary  = mama, the Kalliope router. Serves qwen3.8-flash-next and
+#            ornith-1.5:*, and requires a bearer token.
+# secondary = john. Serves ONLY qwen3.8-flash-next today, and is reachable
+#            without a credential -- verified, not assumed: a request with no
+#            Authorization header and one carrying a deliberately bogus token
+#            both return 200.
+LLM_ROUTE_PRIMARY = "primary"
+LLM_ROUTE_SECONDARY = "secondary"
+DEFAULT_SECONDARY_BASE_URL = "http://john:8888/v1"
+DEFAULT_SECONDARY_MODEL = "qwen3.8-flash-next"
+
+# The ids automated work may use. Mirrors the approved set asserted by
+# mama-automations/scripts/tests/test_scheduled_llm_policy.sh; the two move
+# together or a scheduled job passes here and fails there.
+APPROVED_SCHEDULED_MODELS_NOTE = "qwen3.8-flash-next, or any ornith-1.5:<tier>"
+
+
+def is_approved_scheduled_model(model: str) -> bool:
+    return model == "qwen3.8-flash-next" or model.startswith("ornith-1.5:")
+
+
 DEFAULT_ORNITH_BASE_URL = "http://100.124.155.99:4000/v1"
 DEFAULT_ORNITH_MODEL = "ornith-1.5:35b-medium"
 
@@ -177,8 +203,16 @@ def get_ornith_model() -> str:
         or os.getenv("QWEN_MODEL")
         or DEFAULT_ORNITH_MODEL
     ).strip()
-    if not model.startswith("ornith-1.5:"):
-        raise ValueError(f"scheduled Ornith route rejected model override: {model}")
+    # The check is kept, not relaxed. It previously admitted only
+    # ornith-1.5:*, which was the approved set BEFORE the automated default
+    # lane moved to qwen3.8-flash-next -- so the guard encoded a retired
+    # policy and could not express the one now in force. Failing closed on
+    # anything outside the approved set is the behavior that stays.
+    if not is_approved_scheduled_model(model):
+        raise ValueError(
+            "scheduled route rejected model override: "
+            f"{model!r} (approved: {APPROVED_SCHEDULED_MODELS_NOTE})"
+        )
     return model
 
 
@@ -548,30 +582,83 @@ def _briefing_max_tokens() -> int:
     return int(os.getenv("FINANCE_NEWS_BRIEFING_MAX_TOKENS", "6400"))
 
 
-def run_ornith_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
-    """Call the scheduled Kalliope Ornith route (OpenAI-compatible)."""
-    api_key = (os.getenv("KALLIOPE_SERVING_API_KEY") or "").strip()
-    if not api_key:
-        return "⚠️ Ornith briefing error: KALLIOPE_SERVING_API_KEY not set"
-    try:
+def _scheduled_route() -> tuple[str, str, str, bool]:
+    """Resolve (base_url, api_key, model, requires_key) for the selected route.
+
+    A route that was selected but not fully declared fails here rather than
+    falling back to the other machine. Silently using a different server than
+    the one a job named is the failure this whole contract exists to prevent.
+    """
+    route = (os.getenv("LLM_ROUTE") or LLM_ROUTE_PRIMARY).strip().lower()
+    if route == LLM_ROUTE_SECONDARY:
+        base_url = (os.getenv("LLM_SECONDARY_BASE_URL") or DEFAULT_SECONDARY_BASE_URL).strip()
+        model = (os.getenv("LLM_SECONDARY_MODEL") or DEFAULT_SECONDARY_MODEL).strip()
+        # A credential-free route has to be DECLARED credential-free. An empty
+        # key on its own is not consent: it is more often a secret that failed
+        # to load, and treating it as "no auth needed" turns a broken deploy
+        # into an unauthenticated request.
+        requires_key = (os.getenv("LLM_SECONDARY_REQUIRES_KEY") or "1").strip() != "0"
+        key_var = (os.getenv("LLM_SECONDARY_API_KEY_VAR") or "").strip()
+        api_key = (os.environ.get(key_var) or "").strip() if key_var else ""
+        key_label = key_var or "no LLM_SECONDARY_API_KEY_VAR declared"
+    elif route == LLM_ROUTE_PRIMARY:
+        base_url = get_ornith_base_url()
         model = get_ornith_model()
+        requires_key = True
+        key_label = "KALLIOPE_SERVING_API_KEY"
+        api_key = (os.environ.get(key_label) or "").strip()
+    else:
+        raise ValueError(f"unknown LLM_ROUTE {route!r} (expected primary or secondary)")
+
+    if not is_approved_scheduled_model(model):
+        raise ValueError(
+            f"route {route!r} declares unapproved model {model!r} "
+            f"(approved: {APPROVED_SCHEDULED_MODELS_NOTE})"
+        )
+    if not base_url:
+        raise ValueError(f"route {route!r} resolved no base URL")
+    if requires_key and not api_key:
+        # Names the variable, not just the condition. "no credential" is a
+        # dead end on a host with several; the old single-route message got
+        # this right and the route-aware rewrite nearly lost it.
+        raise ValueError(
+            f"route {route!r} requires a credential and none resolved from {key_label}"
+        )
+    return base_url, api_key, model, requires_key
+
+
+def run_scheduled_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
+    """Call whichever route this job selected, once, failing closed."""
+    try:
+        base_url, api_key, model, _requires_key = _scheduled_route()
     except ValueError as exc:
-        return f"⚠️ Ornith briefing error: {exc}"
+        return f"⚠️ Briefing error: {exc}"
     return call_openai_chat(
         prompt,
-        base_url=get_ornith_base_url(),
+        base_url=base_url,
         model=model,
-        api_key=api_key,
+        api_key=api_key or None,
         max_tokens=_briefing_max_tokens(),
         timeout=timeout,
         deadline=deadline,
-        error_label="Ornith briefing error",
+        error_label="Briefing error",
         reasoning_effort=(
-            os.getenv("FINANCE_NEWS_ORNITH_REASONING_EFFORT")
+            os.getenv("FINANCE_NEWS_REASONING_EFFORT")
+            or os.getenv("FINANCE_NEWS_ORNITH_REASONING_EFFORT")
             or os.getenv("FINANCE_NEWS_QWEN_REASONING_EFFORT")
             or None
         ),
     )
+
+
+def run_ornith_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
+    """Deprecated name for run_scheduled_prompt.
+
+    Kept as an alias so callers written against the single-route world keep
+    working. It no longer implies Ornith: the route, and therefore the model,
+    is whatever LLM_ROUTE selected.
+    """
+    return run_scheduled_prompt(prompt, deadline=deadline, timeout=timeout)
 
 
 def run_ds4_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
