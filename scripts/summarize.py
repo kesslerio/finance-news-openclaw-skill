@@ -582,6 +582,20 @@ def _briefing_max_tokens() -> int:
     return int(os.getenv("FINANCE_NEWS_BRIEFING_MAX_TOKENS", "6400"))
 
 
+def _llm_timeout() -> int:
+    """Per-request socket timeout for a single route call.
+
+    60s was a local-Ornith assumption and stays the default, so no other
+    consumer changes shape. On the secondary route (john, a remote tailnet
+    peer) a single 1.2k-char generation measured ~67s in 2026-09-21 -- 60s
+    fails every summary there -- so the three briefing jobs' systemd
+    drop-ins set FINANCE_NEWS_LLM_TIMEOUT=180 (the 2026-09-09 max_tokens
+    lesson's sibling: an under-sized timeout is invisible until the route
+    moves). An explicit caller-supplied timeout still wins.
+    """
+    return int(os.getenv("FINANCE_NEWS_LLM_TIMEOUT", "60"))
+
+
 def _scheduled_route() -> tuple[str, str, str, bool]:
     """Resolve (base_url, api_key, model, requires_key) for the selected route.
 
@@ -627,7 +641,7 @@ def _scheduled_route() -> tuple[str, str, str, bool]:
     return base_url, api_key, model, requires_key
 
 
-def run_scheduled_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
+def run_scheduled_prompt(prompt: str, deadline: float | None = None, timeout: int | None = None) -> str:
     """Call whichever route this job selected, once, failing closed."""
     try:
         base_url, api_key, model, _requires_key = _scheduled_route()
@@ -639,7 +653,7 @@ def run_scheduled_prompt(prompt: str, deadline: float | None = None, timeout: in
         model=model,
         api_key=api_key or None,
         max_tokens=_briefing_max_tokens(),
-        timeout=timeout,
+        timeout=_llm_timeout() if timeout is None else timeout,
         deadline=deadline,
         error_label="Briefing error",
         reasoning_effort=(
@@ -651,7 +665,7 @@ def run_scheduled_prompt(prompt: str, deadline: float | None = None, timeout: in
     )
 
 
-def run_ornith_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
+def run_ornith_prompt(prompt: str, deadline: float | None = None, timeout: int | None = None) -> str:
     """Deprecated name for run_scheduled_prompt.
 
     Kept as an alias so callers written against the single-route world keep
@@ -661,7 +675,7 @@ def run_ornith_prompt(prompt: str, deadline: float | None = None, timeout: int =
     return run_scheduled_prompt(prompt, deadline=deadline, timeout=timeout)
 
 
-def run_ds4_prompt(prompt: str, deadline: float | None = None, timeout: int = 60) -> str:
+def run_ds4_prompt(prompt: str, deadline: float | None = None, timeout: int | None = None) -> str:
     """Call the local gx10 DeepSeek-V4-Flash (DS4) route (OpenAI-compatible)."""
     api_key = (os.getenv("FINANCE_NEWS_DS4_API_KEY") or "").strip() or None
     return call_openai_chat(
@@ -670,7 +684,7 @@ def run_ds4_prompt(prompt: str, deadline: float | None = None, timeout: int = 60
         model=get_ds4_model(),
         api_key=api_key,
         max_tokens=_briefing_max_tokens(),
-        timeout=timeout,
+        timeout=_llm_timeout() if timeout is None else timeout,
         deadline=deadline,
         error_label="DS4 briefing error",
     )
@@ -1239,14 +1253,17 @@ def parse_translation_array(raw_text: str) -> list[str] | None:
 def _translate_via_prompt_runner(
     titles: list[str],
     deadline: float | None,
-    runner: Callable[[str, float | None, int], str],
+    runner: Callable[..., str],
     provider: str,
 ) -> tuple[list[str], bool]:
     if not titles:
         return [], True
 
+    # No timeout here: the runner's default (FINANCE_NEWS_LLM_TIMEOUT) is
+    # the contract. This path pinned 60s positionally, the same
+    # local-route assumption that starved the secondary route.
     prompt = _build_translation_prompt(titles)
-    reply = runner(prompt, deadline, 60)
+    reply = runner(prompt, deadline)
     if reply.startswith("⚠️"):
         print(f"  ↳ {provider} translation failed: {reply}", file=sys.stderr)
         return titles, False
@@ -1375,14 +1392,14 @@ def summarize_with_ornith(
 ) -> str:
     """Generate an AI summary using the scheduled Ornith route."""
     prompt = _build_summary_prompt(content, language, style)
-    reply_text = run_ornith_prompt(prompt, deadline=deadline, timeout=60)
+    reply_text = run_ornith_prompt(prompt, deadline=deadline)
     if reply_text.startswith("⚠️") and _is_transient_ornith_failure(reply_text):
         remaining = time_left(deadline)
         if remaining is None or remaining >= _ORNITH_RETRY_MIN_SECONDS:
             import time as _time
             print("↻ Ornith transient failure; retrying once within the deadline", file=sys.stderr)
             _time.sleep(_ORNITH_RETRY_DELAY_SECONDS)
-            reply_text = run_ornith_prompt(prompt, deadline=deadline, timeout=60)
+            reply_text = run_ornith_prompt(prompt, deadline=deadline)
     if reply_text.startswith("⚠️"):
         return reply_text
     return reply_text + format_disclaimer(language)
@@ -1396,7 +1413,7 @@ def summarize_with_ds4(
 ) -> str:
     """Generate an AI summary using the explicitly selected DS4 route."""
     prompt = _build_summary_prompt(content, language, style)
-    reply_text = run_ds4_prompt(prompt, deadline=deadline, timeout=60)
+    reply_text = run_ds4_prompt(prompt, deadline=deadline)
     if reply_text.startswith("⚠️"):
         return reply_text
     return reply_text + format_disclaimer(language)

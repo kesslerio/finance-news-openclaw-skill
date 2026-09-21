@@ -1460,3 +1460,57 @@ def test_legacy_name_still_resolves_the_selected_route(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0]["base_url"] == summarize.DEFAULT_SECONDARY_BASE_URL
+
+
+# --- per-prompt timeout sizing (2026-09-21 secondary-route regression) -----
+# The 60s default was a local-route assumption. On the remote secondary
+# (john) the reasoning model exceeds 60s for a 1.2k-char generation
+# (measured), so the hardcoded call-site timeouts made the route contract
+# unroutable in practice: FINANCE_NEWS_LLM_TIMEOUT must actually reach
+# call_openai_chat.
+
+def _secondary_route_env(monkeypatch):
+    monkeypatch.setenv("LLM_ROUTE", "secondary")
+    monkeypatch.setenv("LLM_SECONDARY_REQUIRES_KEY", "0")
+    monkeypatch.delenv("KALLIOPE_SERVING_API_KEY", raising=False)
+
+
+def test_scheduled_prompt_timeout_defaults_to_sixty_when_unset(monkeypatch):
+    calls = _capture_single_call(monkeypatch)
+    _secondary_route_env(monkeypatch)
+    monkeypatch.delenv("FINANCE_NEWS_LLM_TIMEOUT", raising=False)
+
+    assert summarize.run_scheduled_prompt("p", deadline=None) == "briefed"
+    assert calls[0]["timeout"] == 60
+
+
+def test_scheduled_prompt_timeout_is_env_tunable(monkeypatch):
+    calls = _capture_single_call(monkeypatch)
+    _secondary_route_env(monkeypatch)
+    monkeypatch.setenv("FINANCE_NEWS_LLM_TIMEOUT", "180")
+
+    assert summarize.run_scheduled_prompt("p", deadline=None) == "briefed"
+    assert calls[0]["timeout"] == 180
+
+
+def test_writer_and_translation_call_sites_follow_the_timeout_env(monkeypatch):
+    calls = _capture_single_call(monkeypatch)
+    _secondary_route_env(monkeypatch)
+    monkeypatch.setenv("FINANCE_NEWS_LLM_TIMEOUT", "180")
+
+    out = summarize.summarize_with_ornith("inhalt", deadline=None)
+    assert out.startswith("briefed")
+    summarize.translate_via_ornith(["A title"], deadline=None)
+
+    assert [c["timeout"] for c in calls] == [180, 180], (
+        "call sites must not pin a timeout that overrides FINANCE_NEWS_LLM_TIMEOUT"
+    )
+
+
+def test_explicit_caller_timeout_still_wins_over_env(monkeypatch):
+    calls = _capture_single_call(monkeypatch)
+    _secondary_route_env(monkeypatch)
+    monkeypatch.setenv("FINANCE_NEWS_LLM_TIMEOUT", "180")
+
+    summarize.run_scheduled_prompt("p", deadline=None, timeout=30)
+    assert calls[0]["timeout"] == 30
