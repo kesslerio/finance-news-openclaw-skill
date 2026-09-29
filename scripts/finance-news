@@ -55,6 +55,18 @@ fi
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
+# Ensure CA certificates are available for HTTPS feeds
+if [[ -z "${SSL_CERT_FILE:-}" ]]; then
+  if [[ -f /etc/ssl/certs/ca-bundle.crt ]]; then
+    export SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt
+  elif [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
+    export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+  fi
+fi
+if [[ -n "${SSL_CERT_FILE:-}" && -z "${REQUESTS_CA_BUNDLE:-}" ]]; then
+  export REQUESTS_CA_BUNDLE="${SSL_CERT_FILE}"
+fi
+
 usage() {
     cat << EOM
 📈 Finance News CLI
