@@ -192,6 +192,38 @@ def test_format_whatsapp_message_replaces_markdown_headings_and_bold():
     ]
 
 
+def test_format_headlines_uses_citation_markers_without_urls():
+    headlines = [
+        {
+            "source": "Reuters",
+            "title": "ECB holds rates steady",
+            "title_de": "EZB hält Zinsen stabil",
+            "link": "https://www.reuters.com/markets/europe/ecb-rates-long-example-story-1234567890",
+        },
+    ]
+
+    formatted = summarize.format_headlines(headlines, language="de")
+
+    assert "EZB hält Zinsen stabil | Reuters | [1]" in formatted
+    assert "https://" not in formatted
+
+
+def test_format_portfolio_news_omits_links_from_writer_context():
+    article_url = "https://www.reuters.com/markets/portfolio/long-example-story-1234567890"
+    formatted = summarize.format_portfolio_news({
+        "stocks": {
+            "AAPL": {
+                "info": {"type": "Watchlist"},
+                "quote": {"price": 100.0, "change_percent": 0.5},
+                "articles": [{"title": "Apple expands its services business", "link": article_url}],
+            },
+        },
+    })
+
+    assert "Apple expands its services business" in formatted
+    assert article_url not in formatted
+
+
 def test_scheduled_model_defaults_are_ornith_only():
     assert summarize.DEFAULT_ORNITH_MODEL == "ornith-1.5:35b-medium"
     assert summarize.normalize_writer_route(None) == "ornith"
@@ -699,6 +731,111 @@ def test_summarize_with_ornith_uses_localized_briefing_headings(monkeypatch):
     assert "### Märkte" in prompt
     assert "### Sentiment" not in prompt
     assert summary.startswith("### Märkte")
+
+
+def test_generate_briefing_keeps_headline_links_only_in_sources(capsys, monkeypatch):
+    article_url = "https://www.reuters.com/markets/europe/ecb-rates-long-example-story-1234567890"
+    shortened_url = "https://is.gd/brief1"
+    article = {
+        "source": "Reuters",
+        "title": "ECB holds rates steady",
+        "title_de": "EZB hält Zinsen stabil",
+        "link": article_url,
+        "links": [article_url],
+    }
+    market_data = {
+        "headlines": [article],
+        "markets": {
+            "us": {
+                "name": "US Markets",
+                "indices": {
+                    "^GSPC": {
+                        "name": "S&P 500",
+                        "data": {"price": 100, "change_percent": 1.0},
+                    },
+                },
+            },
+        },
+    }
+    labels = summarize.load_config()["translations"]["de"]
+    writer_summary = "\n\n".join([
+        f"### {labels['heading_markets']}\nAlles ruhig.",
+        f"### {labels['heading_sentiment']}\nNeutral.",
+        f"### {labels['heading_top_headlines']}\n1. EZB hält Zinsen stabil [1] [Reuters]",
+        f"### {labels['heading_portfolio_impact']}\nKeine besonderen Auswirkungen.",
+        f"### {labels['heading_watchpoints']}\n- Zinsentscheidungen beobachten.",
+    ])
+    captured = {}
+
+    monkeypatch.setattr(summarize, "get_market_news", lambda *_a, **_k: market_data)
+    monkeypatch.setattr(
+        summarize,
+        "select_top_headlines",
+        lambda *_a, **_k: ([article], [article], "llm", None),
+    )
+    monkeypatch.setattr(summarize, "get_portfolio_news", lambda *_a, **_k: None)
+    monkeypatch.setattr(summarize, "get_portfolio_movers", lambda *_a, **_k: {"movers": []})
+    monkeypatch.setattr(summarize, "datetime", FixedDateTime)
+    monkeypatch.setattr(summarize, "shorten_url", lambda _url: shortened_url)
+
+    def fake_writer(prompt, deadline=None, timeout=60):
+        captured["prompt"] = prompt
+        return writer_summary
+
+    monkeypatch.setattr(summarize, "run_ornith_prompt", fake_writer)
+
+    args = type(
+        "Args",
+        (),
+        {
+            "lang": "de",
+            "style": "briefing",
+            "time": "morning",
+            "model": "ornith",
+            "json": True,
+            "research": False,
+            "deadline": None,
+            "fast": False,
+            "llm": True,
+            "debug": False,
+        },
+    )()
+
+    summarize.generate_briefing(args)
+
+    payload = json.loads(capsys.readouterr().out)
+    prompt = captured["prompt"]
+    macro_message = payload["macro_message"]
+    assert "- EZB hält Zinsen stabil | Reuters | [1]" in prompt
+    assert "Do not include URLs or links anywhere in your response" in prompt
+    assert "## Quellen" not in prompt
+    assert article_url not in prompt
+    assert article_url not in macro_message
+    assert macro_message.count(shortened_url) == 1
+    assert [line for line in macro_message.splitlines() if line.startswith("[1]")] == [
+        f"[1] {shortened_url}",
+    ]
+    headline_lines = [line for line in macro_message.splitlines() if "EZB hält Zinsen stabil" in line]
+    assert headline_lines == ["1. EZB hält Zinsen stabil [1] [Reuters]"]
+    assert all(f"*{labels[key]}*" in macro_message for key in (
+        "heading_markets",
+        "heading_sentiment",
+        "heading_top_headlines",
+        "heading_portfolio_impact",
+        "heading_watchpoints",
+    ))
+    assert summarize.format_disclaimer("de") in payload["summary"]
+
+
+def test_shorten_url_falls_back_to_original_when_service_fails(monkeypatch):
+    article_url = "https://www.reuters.com/markets/europe/ecb-rates-long-example-story-1234567890"
+
+    def fail_urlopen(*_args, **_kwargs):
+        raise TimeoutError("shortener unavailable")
+
+    monkeypatch.setattr(summarize.urllib.request, "urlopen", fail_urlopen)
+
+    assert summarize.shorten_url(article_url) == article_url
 
 
 def test_summarize_with_ornith_success(monkeypatch):
