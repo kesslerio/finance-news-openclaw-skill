@@ -1359,7 +1359,8 @@ Short market setup from the supplied data only.
 One-line bullish/bearish/neutral read with a brief rationale from the supplied data only.
 
 ### {heading_top}
-Use a numbered list. We will insert the exact headlines; do not invent.
+Use a numbered list. Repeat the supplied headline text and keep its citation marker (such as [1]).
+Do not include URLs or links anywhere in your response; source links are added separately.
 
 ### {heading_portfolio}
 Short impact focused on holdings/watchlist names when relevant.
@@ -1440,10 +1441,10 @@ def format_market_data(market_data: dict) -> str:
 
 
 def format_headlines(headlines: list, language: str = "en") -> str:
-    """Format headlines for the prompt. Uses title_de when available for German."""
+    """Format URL-free headline context with markers for the final sources block."""
     lines = ["## Headlines\n"]
 
-    for article in headlines[:MAX_HEADLINES_IN_PROMPT]:
+    for idx, article in enumerate(headlines[:MAX_HEADLINES_IN_PROMPT], start=1):
         source = article.get('source')
         if not source:
             sources = article.get('sources')
@@ -1455,12 +1456,7 @@ def format_headlines(headlines: list, language: str = "en") -> str:
         title = article.get('title', '')
         if language == "de" and article.get('title_de'):
             title = article.get('title_de')
-        link = article.get('link', '')
-        if not link:
-            links = article.get('links')
-            if isinstance(links, (set, list, tuple)) and links:
-                link = sorted([str(item).strip() for item in links if str(item).strip()])[0]
-        lines.append(f"- {title} | {source} | {link}")
+        lines.append(f"- {title} | {source} | [{idx}]")
 
     return '\n'.join(lines)
 
@@ -1539,11 +1535,7 @@ def format_portfolio_news(portfolio_data: dict) -> str:
         entry = [f"#### {display_symbol} (${price}, {change_pct:+.2f}%){indicator_str}"]
         for article in articles[:3]:
             title = article.get("title_de") or article.get("title", "")
-            link = article.get("link", "")
-            if link:
-                entry.append(f"- {title} | {link}")
-            else:
-                entry.append(f"- {title}")
+            entry.append(f"- {title}")
         entry.append("")
 
         by_type[t].append((score, '\n'.join(entry)))
@@ -2018,9 +2010,10 @@ def generate_briefing(args):
 
     if market_data:
         content_parts.append(format_market_data(market_data))
-        if headline_shortlist:
-            content_parts.append(format_headlines(headline_shortlist, language=language))
-            content_parts.append(format_sources(top_headlines, labels))
+        if top_headlines:
+            # The writer receives only the selected headlines and numeric
+            # markers. Their shortened links are appended once below.
+            content_parts.append(format_headlines(top_headlines, language=language))
 
     # Only include portfolio if fetch succeeded (no error key)
     if portfolio_data:
