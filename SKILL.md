@@ -1,6 +1,6 @@
 ---
 name: finance-news
-description: "Market news briefings with AI summaries and price alerts. Aggregates headlines from US/Europe/Japan markets. Use when: 'stock news', 'market updates', 'morning briefing', 'evening market wrap', 'financial headlines', 'price alerts', 'what happened in the market'. Supports WhatsApp delivery and English/German output. NOT for fundamental analysis or scoring (use equity-research). NOT for raw financial data queries (use openbb)."
+description: "Market news briefings, weekly sector overviews, and price alerts. Aggregates headlines from US/Europe/Japan markets. Use when: 'stock news', 'market updates', 'morning briefing', 'evening market wrap', 'financial headlines', 'sector performance', 'price alerts', 'what happened in the market'. Supports WhatsApp delivery and English/German output. NOT for fundamental analysis or scoring (use equity-research). NOT for raw financial data queries (use openbb)."
 ---
 
 # Finance News Skill
@@ -38,6 +38,7 @@ finance-news briefing --morning        # Test a dry-run briefing
 ```bash
 finance-news briefing --morning                                  # Morning briefing
 finance-news briefing --evening --send --group "Market Briefing" # Evening + WhatsApp
+finance-news sector-overview                                  # Weekly sector report
 finance-news market                                              # Market overview
 finance-news portfolio                                           # Portfolio news
 finance-news news AAPL                                           # Ticker-specific news

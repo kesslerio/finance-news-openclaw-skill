@@ -67,6 +67,7 @@ Commands:
   config                          Show current configuration
 
   briefing [--morning|--evening]  Generate market briefing
+  sector-overview [--send]        Generate weekly sector performance report
   market                          Market overview (indices + headlines)
   portfolio                       News for portfolio stocks
   portfolio-only                  Top gainers/losers from portfolio with news
@@ -84,6 +85,7 @@ Options:
   --lang <de|en>     Output language (default: de)
   --json             Output as JSON
   --send             Send to WhatsApp group
+  --group <target>   WhatsApp group name or JID
   --deadline <sec>   Overall deadline in seconds
   --fast             Fast mode (shorter timeouts, fewer items)
   --help             Show this help
@@ -100,6 +102,11 @@ case "${1:-}" in
   briefing)
     shift
     "$PYTHON_BIN" "$SCRIPT_DIR/briefing.py" "$@"
+    ;;
+
+  sector-overview)
+    shift
+    "$PYTHON_BIN" "$SCRIPT_DIR/sector_overview.py" "$@"
     ;;
   
   market)

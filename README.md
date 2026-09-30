@@ -8,6 +8,7 @@ AI-powered market news briefings with configurable language output and automated
 - **Global markets:** US (S&P, Dow, NASDAQ), Europe (DAX, STOXX, FTSE), Japan (Nikkei)
 - **AI summaries:** LLM-powered analysis in German or English
 - **Automated briefings:** Morning (market open) and evening (market close)
+- **Weekly sector report:** Performance overview for the S&P 500 sector ETFs
 - **WhatsApp/Telegram delivery:** Send briefings via openclaw
 - **Portfolio tracking:** Personalized news for your stocks with price alerts
 - **Lobster workflows:** Approval gates before sending
@@ -47,6 +48,9 @@ finance-news briefing --morning --lang de
 
 # Use fast mode + deadline (recommended)
 finance-news briefing --morning --lang de --fast --deadline 300
+
+# Generate a weekly sector performance overview
+finance-news sector-overview
 ```
 
 ## Environment Variables

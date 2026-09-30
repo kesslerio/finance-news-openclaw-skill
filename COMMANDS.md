@@ -29,6 +29,19 @@ finance-news market
 finance-news market --json
 ```
 
+## Weekly Sector Overview
+
+```bash
+# Print five-session performance for the S&P 500 sector ETFs
+finance-news sector-overview
+
+# Send the report to the configured WhatsApp target
+finance-news sector-overview --send
+
+# Set FINANCE_NEWS_TARGET or pass a target explicitly
+finance-news sector-overview --send --group "Market Briefing"
+```
+
 ## Portfolio Management
 
 ```bash
