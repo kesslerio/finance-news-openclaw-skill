@@ -49,6 +49,21 @@ class _FakeUrlopenResponse:
         return False
 
 
+class _FakeShortenerResponse:
+    def __init__(self, body: str, status: int = 200):
+        self._raw = body.encode("utf-8")
+        self.status = status
+
+    def read(self):
+        return self._raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
 def test_format_market_data_handles_non_numeric_change_percent():
     market_data = {
         "markets": {
@@ -827,7 +842,91 @@ def test_generate_briefing_keeps_headline_links_only_in_sources(capsys, monkeypa
     assert summarize.format_disclaimer("de") in payload["summary"]
 
 
-def test_shorten_url_falls_back_to_original_when_service_fails(monkeypatch):
+def test_shorten_url_accepts_a_usable_shortened_url(monkeypatch, capsys):
+    article_url = "https://www.reuters.com/markets/europe/ecb-rates-long-example-story-1234567890"
+    shortened_url = "https://is.gd/brief1"
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["timeout"] = timeout
+        return _FakeShortenerResponse(shortened_url)
+
+    monkeypatch.setattr(summarize.urllib.request, "urlopen", fake_urlopen)
+
+    assert summarize.shorten_url(article_url) == shortened_url
+    assert captured["url"].startswith("https://is.gd/create.php?")
+    assert captured["timeout"] == 3
+    assert capsys.readouterr().err == ""
+
+
+def test_shorten_url_rejects_http_success_with_error_body(monkeypatch, capsys):
+    article_url = "https://www.reuters.com/markets/europe/ecb-rates-long-example-story-1234567890"
+
+    monkeypatch.setattr(
+        summarize.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _FakeShortenerResponse("Error, database insert failed", status=200),
+    )
+
+    assert summarize.shorten_url(article_url) == article_url
+    assert capsys.readouterr().err.splitlines() == [
+        "⚠️ URL shortener failed: response did not contain a usable HTTP URL; using original URL",
+    ]
+
+
+def test_format_sources_falls_back_to_original_link_after_error_body(monkeypatch, capsys):
+    article_url = "https://www.reuters.com/markets/europe/ecb-rates-long-example-story-1234567890"
+    monkeypatch.setattr(
+        summarize.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _FakeShortenerResponse("Error, database insert failed", status=200),
+    )
+
+    assert summarize.format_sources([{"link": article_url}], {"sources_header": "Sources"}) == (
+        f"## Sources\n\n[1] {article_url}"
+    )
+    assert capsys.readouterr().err.splitlines() == [
+        "⚠️ URL shortener failed: response did not contain a usable HTTP URL; using original URL",
+    ]
+
+
+def test_shorten_url_falls_back_for_non_2xx_response(monkeypatch, capsys):
+    article_url = "https://www.reuters.com/markets/europe/ecb-rates-long-example-story-1234567890"
+
+    def raise_http_error(*_args, **_kwargs):
+        raise summarize.urllib.error.HTTPError(
+            "https://is.gd/create.php",
+            503,
+            "Service Unavailable",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr(summarize.urllib.request, "urlopen", raise_http_error)
+
+    assert summarize.shorten_url(article_url) == article_url
+    assert capsys.readouterr().err.splitlines() == [
+        "⚠️ URL shortener failed: HTTP 503 response; using original URL",
+    ]
+
+
+@pytest.mark.parametrize("body", ["", "not a URL", "https://", "http://example.com:invalid"])
+def test_shorten_url_falls_back_for_malformed_or_empty_body(monkeypatch, capsys, body):
+    article_url = "https://www.reuters.com/markets/europe/ecb-rates-long-example-story-1234567890"
+    monkeypatch.setattr(
+        summarize.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _FakeShortenerResponse(body),
+    )
+
+    assert summarize.shorten_url(article_url) == article_url
+    assert capsys.readouterr().err.splitlines() == [
+        "⚠️ URL shortener failed: response did not contain a usable HTTP URL; using original URL",
+    ]
+
+
+def test_shorten_url_falls_back_to_original_when_service_fails(monkeypatch, capsys):
     article_url = "https://www.reuters.com/markets/europe/ecb-rates-long-example-story-1234567890"
 
     def fail_urlopen(*_args, **_kwargs):
@@ -836,6 +935,9 @@ def test_shorten_url_falls_back_to_original_when_service_fails(monkeypatch):
     monkeypatch.setattr(summarize.urllib.request, "urlopen", fail_urlopen)
 
     assert summarize.shorten_url(article_url) == article_url
+    assert capsys.readouterr().err.splitlines() == [
+        "⚠️ URL shortener failed: TimeoutError; using original URL",
+    ]
 
 
 def test_summarize_with_ornith_success(monkeypatch):
