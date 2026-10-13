@@ -360,7 +360,7 @@ def shorten_url(url: str) -> str:
     """Shorten URL using is.gd service (GET request)."""
     if not url or len(url) < 30:  # Don't shorten short URLs
         return url
-        
+
     try:
         api_url = "https://is.gd/create.php"
         params = urllib.parse.urlencode({'format': 'simple', 'url': url})
@@ -368,14 +368,28 @@ def shorten_url(url: str) -> str:
             f"{api_url}?{params}",
             headers={"User-Agent": "Mozilla/5.0 (compatible; finance-news/1.0)"}
         )
-        
+
         # Set a short timeout - if it's slow, just use original
         with urllib.request.urlopen(req, timeout=3) as response:
             short_url = response.read().decode('utf-8').strip()
-            if short_url.startswith('http'):
-                return short_url
-    except Exception:
-        pass  # Fail silently, return original
+        try:
+            parsed_url = urllib.parse.urlsplit(short_url)
+            parsed_url.port
+            usable_url = (
+                parsed_url.scheme in {"http", "https"}
+                and parsed_url.hostname
+                and not any(character.isspace() for character in short_url)
+            )
+        except ValueError:
+            usable_url = False
+        if usable_url:
+            return short_url
+        failure_reason = "response did not contain a usable HTTP URL"
+    except urllib.error.HTTPError as error:
+        failure_reason = f"HTTP {error.code} response"
+    except Exception as error:
+        failure_reason = type(error).__name__
+    print(f"⚠️ URL shortener failed: {failure_reason}; using original URL", file=sys.stderr)
     return url
 
 
